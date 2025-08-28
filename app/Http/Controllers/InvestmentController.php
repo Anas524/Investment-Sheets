@@ -14,83 +14,21 @@ class InvestmentController extends Controller
 {
     public function index()
     {
-        $investments = Investment::orderBy('id')->get()->groupBy('invoice_number');
+        // Get all customer sheets with id and name
+        $customerSheets = \App\Models\CustomerSheet::select('id', 'sheet_name')->get();
 
-        $merged = [];
-        foreach ($investments as $invoice => $grouped) {
-            $first = $grouped->first();
-            $mergedEntry = $first->toArray();
+        // Extract sheet names (for JS dropdown etc.)
+        $sheetNames = $customerSheets->pluck('sheet_name');
 
-            $mergedEntry['descriptions'] = [];
-            $mergedEntry['unit_prices'] = [];
-            $mergedEntry['no_of_ctns_list'] = [];
-            $mergedEntry['units_per_ctn_list'] = [];
-            $mergedEntry['total_units_list'] = [];
-            $mergedEntry['vat_amount_list'] = [];
-            $mergedEntry['total_material_list'] = [];
-            $mergedEntry['total_material_incl_vat_list'] = [];
-            $mergedEntry['weight_list'] = [];
-            $mergedEntry['shipping_rate_list'] = [];
-            $mergedEntry['dgd_list'] = [];
-            $mergedEntry['labour_list'] = [];
-            $mergedEntry['shipping_cost_list'] = [];
-            $mergedEntry['remarks_list'] = [];
-
-            $mergedEntry['sub_serials'] = $grouped->pluck('sub_serial')->filter()->values();
-
-            foreach ($grouped as $item) {
-                $prefix = $item->sub_serial ? $item->sub_serial . '. ' : '';
-                $mergedEntry['descriptions'][] = $prefix . $item->description;
-                $mergedEntry['unit_prices'][] = $prefix . 'AED ' . number_format($item->unit_price, 2);
-                $mergedEntry['no_of_ctns_list'][] = $prefix . $item->no_of_ctns;
-                $mergedEntry['units_per_ctn_list'][] = $prefix . $item->units_per_ctn;
-                $mergedEntry['total_units_list'][] = $prefix . $item->total_units;
-                $mergedEntry['vat_amount_list'][] = $prefix . 'AED ' . number_format($item->vat_amount, 2);
-                $mergedEntry['total_material_list'][] = $prefix . 'AED ' . number_format($item->total_material, 2);
-                $mergedEntry['total_material_incl_vat_list'][] = $prefix . 'AED ' . number_format($item->total_material_including_vat, 2);
-                $mergedEntry['weight_list'][] = $prefix . $item->weight;
-                $mergedEntry['shipping_rate_list'][] = $prefix . 'AED ' . number_format($item->shipping_rate, 2);
-                $mergedEntry['dgd_list'][] = $prefix . 'AED ' . number_format($item->dgd, 2);
-                $mergedEntry['labour_list'][] = $prefix . 'AED ' . number_format($item->labour, 2);
-                $mergedEntry['shipping_cost_list'][] = $prefix . 'AED ' . number_format($item->shipping_cost, 2);
-                $mergedEntry['remarks_list'][] = $prefix . $item->remarks;
-            }
-
-            $mergedEntry['invoice_total'] = $grouped->sum('total_material_including_vat');
-
-            $mergedEntry['description_combined'] = implode("<br>", $mergedEntry['descriptions']);
-            $mergedEntry['unit_price_combined'] = implode("<br>", $mergedEntry['unit_prices']);
-            $mergedEntry['no_of_ctns_combined'] = implode("<br>", $mergedEntry['no_of_ctns_list']);
-            $mergedEntry['units_per_ctn_combined'] = implode("<br>", $mergedEntry['units_per_ctn_list']);
-            $mergedEntry['total_units_combined'] = implode("<br>", $mergedEntry['total_units_list']);
-            $mergedEntry['vat_amount_combined'] = implode("<br>", $mergedEntry['vat_amount_list']);
-            $mergedEntry['total_material_combined'] = implode("<br>", $mergedEntry['total_material_list']);
-            $mergedEntry['total_material_incl_vat_combined'] = implode("<br>", $mergedEntry['total_material_incl_vat_list']);
-            $mergedEntry['weight_combined'] = implode("<br>", $mergedEntry['weight_list']);
-            $mergedEntry['shipping_rate_combined'] = implode("<br>", $mergedEntry['shipping_rate_list']);
-            $mergedEntry['dgd_combined'] = implode("<br>", $mergedEntry['dgd_list']);
-            $mergedEntry['labour_combined'] = implode("<br>", $mergedEntry['labour_list']);
-            $mergedEntry['shipping_cost_combined'] = implode("<br>", $mergedEntry['shipping_cost_list']);
-            $mergedEntry['remarks_combined'] = implode("<br>", $mergedEntry['remarks_list']);
-
-            // This is needed for Blade view: form data-invoice
-            $mergedEntry['invoice'] = $mergedEntry['invoice_number'];
-            $mergedEntry['invoice_file'] = $first->invoice_path ?? null;
-            $mergedEntry['receipt'] = $first->receipt_path ?? null;
-            $mergedEntry['note'] = $first->note_path ?? null;
-
-            $merged[] = (object) $mergedEntry;
-        }
+        // Store or get the active sheet
+        $activeSheet = request('activeSheet', session('activeSheet', 'summary'));
+        session(['activeSheet' => $activeSheet]);
 
         return view('index', [
-            'investments' => $merged,
-            'totalMaterial' => Investment::sum('total_material'),
-            'totalMaterialInclVAT' => Investment::sum('total_material_including_vat'),
-            'totalVAT' => Investment::sum('vat_amount'),
-            'totalShipment' => Investment::sum('shipping_cost'),
-            'grandTotal' => Investment::sum('total_material_including_vat') + Investment::sum('shipping_cost'),
-
-            'totalAmount' => USClient::sum('amount'),
+            'totalAmount' => \App\Models\USClient::sum('amount'),
+            'customerSheets' => $customerSheets,   // used in @foreach in Blade
+            'sheetNames' => $sheetNames,           // used in <script id="customerSheetsData">
+            'activeSheet' => $activeSheet,
         ]);
     }
 

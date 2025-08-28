@@ -1,31 +1,49 @@
 <?php
 
-use App\Http\Controllers\BLClientController;
-use App\Http\Controllers\FFClientController;
+use App\Http\Controllers\BeneficiaryController;
+use App\Http\Controllers\CustomerLoanLedgerController;
+use App\Http\Controllers\CustomerSheetAttachmentController;
+use App\Http\Controllers\CustomerSheetController;
+use App\Http\Controllers\CustomerSheetEntryController;
+use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\GtsInvestmentController;
+use App\Http\Controllers\GtsMaterialController;
 use App\Http\Controllers\InvestmentController;
 use App\Http\Controllers\LocalSalesController;
-use App\Http\Controllers\RHClientController;
 use App\Http\Controllers\USClientController;
 use App\Http\Controllers\SQClientController;
 use App\Http\Controllers\SummaryController;
+use App\Http\Controllers\UserPreferenceController;
 use Illuminate\Support\Facades\Route;
 
-// GTS Investment Sheet Routes
-Route::get('/', [InvestmentController::class, 'index']);
-Route::post('/save-investment', [InvestmentController::class, 'saveInvestment']);
-Route::put('/update-investment/{id}', [InvestmentController::class, 'updateInvestment']);
-Route::delete('/delete-investment/{id}', [InvestmentController::class, 'deleteInvestment']);
-Route::get('/get-investment/{id}', [InvestmentController::class, 'getInvestment']);
+// Homepage
+Route::get('/', [InvestmentController::class, 'index'])->name('index');
 
-Route::post('/upload-attachments/{id}', [InvestmentController::class, 'uploadAttachment']);
-Route::get('/get-attachments/{id}', [InvestmentController::class, 'getAttachments']);
+// Materials
+Route::get('/gts-materials', [GtsMaterialController::class, 'index']);
+Route::post('/gts-materials', [GtsMaterialController::class, 'store']);
+Route::put('/gts-materials/{id}', [GtsMaterialController::class, 'update']);
+Route::delete('/gts-materials/{id}', [GtsMaterialController::class, 'destroy']);
+Route::delete('/gts-materials/items/{id}', [GtsMaterialController::class, 'deleteItem']);
 
-Route::delete('/delete-investment-by-invoice/{invoice}', [InvestmentController::class, 'deleteByInvoice'])
-    ->where('invoice', '.*');
+Route::post('/gts-materials/upload-attachments/{id}', [GtsMaterialController::class, 'uploadAttachments']);
+Route::get('/gts-materials/get-attachments/{id}', [GtsMaterialController::class, 'getAttachments']);
+Route::get('/gts-materials/download-pdf/{id}', [GtsMaterialController::class, 'downloadAttachments']);
 
-Route::get('/get-investment-by-invoice/{invoice}/{sub_serial}', [InvestmentController::class, 'getByInvoiceAndSubSerial']);
+// Investments
+Route::get('/investments', [GtsInvestmentController::class, 'index'])->name('investments.index');
+Route::post('/investments', [GtsInvestmentController::class, 'store'])->name('investments.store');
+Route::put('/investments/{id}', [GtsInvestmentController::class, 'update'])->name('investments.update');
+Route::post('/investments/{id}/finalize', [GtsInvestmentController::class, 'finalize'])->name('investments.finalize');
+Route::delete('/investments/{id}', [GtsInvestmentController::class, 'destroy']);
 
-Route::post('/store-multiple-entry', [InvestmentController::class, 'storeMultipleEntry'])->name('store.multiple.entry');
+Route::get('/gts-investments/total', [GtsInvestmentController::class, 'getTotalAmount']);
+
+Route::post('/investment/{id}/murabaha', [GtsInvestmentController::class, 'updateMurabaha']);
+
+Route::post('/investment/{id}/upload-attachments', [GtsInvestmentController::class, 'uploadAttachments']);
+Route::get('/investment/{id}/attachments', [GtsInvestmentController::class, 'getAttachments']);
+Route::get('/investment/{id}/attachments/download', [GtsInvestmentController::class, 'downloadAttachments']);
 
 // US CLIENT PAYMENT SHEET ROUTES
 Route::get('/us-client/data', [USClientController::class, 'index']);
@@ -39,75 +57,82 @@ Route::post('/sq-client/save', [SQClientController::class, 'store']);
 Route::put('/sq-client/update/{id}', [SQClientController::class, 'update']);
 Route::delete('/sq-client/delete/{id}', [SQClientController::class, 'destroy']);
 
-// RH SHEET ROUTES
-Route::get('/rh-client/data', [RHClientController::class, 'index']);
-Route::post('/rh-client/save-group', [RHClientController::class, 'saveRHClient']);
-Route::put('/rh-client/update/{id}', [RHClientController::class, 'updateRHClient']);
-Route::delete('/rh-client/delete/{id}', [RHClientController::class, 'destroy']);
-
-Route::post('/rh-client/save-multiple', [RHClientController::class, 'saveMultiple']);
-Route::post('/rh-client/save', [RHClientController::class, 'store']);
-Route::post('/rh-client/delete-multiple', [RHClientController::class, 'deleteMultiple']);
-
-Route::get('/rh-client/data-all', [RHClientController::class, 'getAllEntries']);
-
-Route::get('/rh-client/get-subentry/{id}/{sub_serial}', [RHClientController::class, 'getSubEntry']);
-Route::put('/rh-client/update-subentry/{id}/{sub_serial}', [RHClientController::class, 'updateSubEntry']);
-
-Route::get('/rh-client/resequence', [RHClientController::class, 'resequenceSrNo']);
-
-Route::post('/rh-loan/save', [RHClientController::class, 'storeLoan']);
-Route::get('/rh-loan/entries', [RHClientController::class, 'getLoanEntries']);
-Route::delete('/rh-loan/delete/{id}', [RHClientController::class, 'deleteLoan']);
-Route::put('/rh-loan/update/{id}', [RHClientController::class, 'updateLoan']);
-
-// FF SHEET ROUTES
-Route::get('/ff-client/data', [FFClientController::class, 'index']);
-Route::post('/ff-client/save-entry-manual', [FFClientController::class, 'saveFFClient']);
-Route::put('/ff-client/update/{id}', [FFClientController::class, 'updateFFClient']);
-Route::delete('/ff-client/delete/{id}', [FFClientController::class, 'destroy']);
-
-Route::post('/ff-client/save-multiple', [FFClientController::class, 'saveMultiple']);
-Route::post('/ff-client/save', [FFClientController::class, 'store']);
-Route::post('/ff-client/delete-multiple', [FFClientController::class, 'deleteMultiple']);
-
-Route::get('/ff-client/data-all', [FFClientController::class, 'getAllEntries']);
-
-Route::get('/ff-client/get-subentry/{id}/{sub_serial}', [FFClientController::class, 'getSubEntry']);
-Route::put('/ff-client/update-subentry/{id}/{sub_serial}', [FFClientController::class, 'updateSubEntry']);
-
-Route::get('/ff-client/resequence', [FFClientController::class, 'resequenceSrNo']);
-
-// BL SHEET ROUTES
-Route::get('/bl-client/data', [BLClientController::class, 'index']);
-Route::post('/bl-client/save-entry-manual', [BLClientController::class, 'saveBLClient']);
-Route::put('/bl-client/update/{id}', [BLClientController::class, 'updateBLClient']);
-Route::delete('/bl-client/delete/{id}', [BLClientController::class, 'destroy']);
-
-Route::post('/bl-client/save-multiple', [BLClientController::class, 'saveMultiple']);
-Route::post('/bl-client/save', [BLClientController::class, 'store']);
-Route::post('/bl-client/delete-multiple', [BLClientController::class, 'deleteMultiple']);
-
-Route::get('/bl-client/data-all', [BLClientController::class, 'getAllEntries']);
-
-Route::get('/bl-client/get-subentry/{id}/{sub_serial}', [BLClientController::class, 'getSubEntry']);
-Route::put('/bl-client/update-subentry/{id}/{sub_serial}', [BLClientController::class, 'updateSubEntry']);
-
-Route::get('/bl-client/resequence', [BLClientController::class, 'resequenceSrNo']);
-
 // Local Sales ROUTES
-Route::post('/local-sales/store-multiple', [LocalSalesController::class, 'storeMultiple'])->name('local-sales.store-multiple');
-Route::post('/local-sales/save', [LocalSalesController::class, 'store'])->name('local-sales.store');
-Route::get('/local-sales/data', [LocalSalesController::class, 'index']);
+Route::get('/local-sales',            [LocalSalesController::class, 'index']);
+Route::post('/local-sales',            [LocalSalesController::class, 'store']);
+Route::put('/local-sales/{local}',    [LocalSalesController::class, 'update']);
+Route::delete('/local-sales/{local}',    [LocalSalesController::class, 'destroy']);
+Route::get('/local-sales/{local}/items', [LocalSalesController::class, 'items'])
+    ->name('local-sales.items');
 
-Route::post('/local-sales/delete', [LocalSalesController::class, 'delete'])->name('local-sales.delete');
-Route::delete('/local-sales/delete/{sr_no}/{sub_serial}', [LocalSalesController::class, 'destroyMultiple']);
-
-Route::post('/local-sales/update/{id}', [LocalSalesController::class, 'update']);
+Route::prefix('local-sales/{local}')->group(function () {
+    Route::post('attachments',       [LocalSalesController::class, 'uploadAttachments']);
+    Route::get('attachments',       [LocalSalesController::class, 'getAttachments']);
+    Route::get('attachments/pdf',   [LocalSalesController::class, 'downloadAttachments']);
+});
 
 // Summary Sheet
 Route::get('/summary/cash-out', [SummaryController::class, 'getCashOut']);
 Route::get('/summary-data', [SummaryController::class, 'getSummaryData']);
 // Cash In Breakdown Route
 Route::get('/summary/cash-in-breakdown', [SummaryController::class, 'getCashInBreakdown']);
+Route::get('/summary/sq/total', [SummaryController::class, 'sqTotal']);
+Route::get('/summary/local-sales/total', [SummaryController::class, 'localSalesTotal']);
 
+// Create customer sheet
+Route::post('/customer/sheets/create', [CustomerSheetController::class, 'storeSheetName'])->name('customer.sheets.create');
+
+Route::get('/dashboard', function () {
+    return redirect()->route('index');
+})->name('dashboard');
+
+Route::get('/customer/sheet/data/{sheet}', [CustomerSheetController::class, 'getSheetData']);
+
+Route::post('/customer/sheet/entry/store', [CustomerSheetController::class, 'storeEntry'])->name('customer.sheet.entry.store');
+
+Route::post('/update-customer-sheet', [CustomerSheetController::class, 'update'])->name('customer.update');
+
+Route::post('/sheet/create', [CustomerSheetController::class, 'create'])->name('sheet.create');
+Route::post('/sheet/entry', [CustomerSheetController::class, 'addEntry'])->name('sheet.addEntry');
+
+Route::post('/customer-sheet/store', [CustomerSheetController::class, 'store']);
+Route::get('/customer-sheet/load/{sheetId}', [CustomerSheetController::class, 'loadCustomerSheet']);
+Route::delete('/customer-sheet/delete-entry/{id}', [CustomerSheetController::class, 'deleteEntry']);
+
+Route::get('/customer-sheet/{sheetId}/entries', [CustomerSheetController::class, 'entries']);
+
+Route::post('/customer-sheet/entry/update', [CustomerSheetController::class, 'update'])
+    ->name('customer.entry.update');
+
+Route::prefix('customer-sheet')->group(function () {
+    // for loan ledger
+    Route::get('{sheet}/loan-ledger', [CustomerLoanLedgerController::class, 'index'])->name('loan_ledger.index');
+    Route::post('{sheet}/loan-ledger', [CustomerLoanLedgerController::class, 'store'])->name('loan_ledger.store');
+    Route::put('loan-ledger/{id}', [CustomerLoanLedgerController::class, 'update'])->name('loan_ledger.update');
+    Route::delete('loan-ledger/{id}', [CustomerLoanLedgerController::class, 'destroy'])->name('loan_ledger.destroy');
+
+    // for customer attachment
+    Route::get('{entry}/attachments/download-all', [CustomerSheetAttachmentController::class, 'downloadAll'])->name('customer.attach.downloadAll');
+    Route::get('{entry}/attachments', [CustomerSheetAttachmentController::class, 'index'])->name('customer.attach.index');
+    Route::post('{entry}/attachments', [CustomerSheetAttachmentController::class, 'store'])->name('customer.attach.store');
+    Route::delete('attachments/{id}', [CustomerSheetAttachmentController::class, 'destroy'])->name('customer.attach.destroy');
+});
+
+Route::get('/summary/customer-sheets/totals', [SummaryController::class, 'customerSheetTotals']);
+Route::get('/summary/customer-sheets/rows',   [SummaryController::class, 'customerSheetRows'])
+    ->name('summary.customerSheets.rows');
+Route::get(
+    '/summary/customer-sheets/loans',
+    [SummaryController::class, 'customerSheetLoans']
+)->name('summary.customerSheets.loans');
+
+Route::prefix('beneficiaries')->group(function () {
+    Route::get('/',            [BeneficiaryController::class, 'index']);    // optional: page route
+    Route::get('/data',        [BeneficiaryController::class, 'data']);     // JSON for all 3
+    Route::post('/',           [BeneficiaryController::class, 'store']);    // add one
+    Route::delete('/{id}',     [BeneficiaryController::class, 'destroy']);  // delete one
+    Route::put('/{id}',        [BeneficiaryController::class, 'update']);   // edit and update
+});
+
+Route::get('/customer-sheet/section/{sheet}', [CustomerSheetController::class, 'section'])
+     ->name('customer.sheet.section');

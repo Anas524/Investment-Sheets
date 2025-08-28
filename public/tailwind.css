@@ -1,0 +1,186 @@
+.us-table th,
+.us-table td,
+.sq-table th,
+.sq-table td {
+  border-bottom: 1px solid #d1d5db;
+  /* only horizontal lines */
+  text-align: center;
+}
+
+td {
+  font-variant-numeric: tabular-nums !important;
+}
+
+/* Bigger size for ALL sheet logos */
+#headerIcon {
+  width: 34px;
+  /* adjust to taste */
+  height: 34px;
+  object-fit: contain;
+  transition: width .15s ease, height .15s ease, margin .15s ease;
+}
+
+/* Keep the Summary (sub-logo.png) smaller + slight drop */
+#headerIcon[src$="sub-logo.png"],
+#headerIcon[src*="sub-logo.png"] {
+  /* fallback if path has query/hash */
+  width: 28px;
+  height: 28px;
+  margin-top: 0;
+  margin-bottom: 5px;
+}
+
+/* Just to be explicit: remove any extra bottom margin for others */
+#headerIcon:not([src*="sub-logo.png"]) {
+  margin-top: 5px;
+  margin-bottom: 0;
+}
+
+#headerTitle {
+  margin-bottom: 5px;
+}
+
+.header-bar:has(#headerIcon[src*="sub-logo.png"]) #headerTitle {
+  margin-bottom: 0;
+}
+
+.modal-content {
+  border-radius: 1rem;
+  overflow: hidden;
+}
+
+.bg-gray-50 {
+  background-color: #f9fafb;
+}
+
+.btn-close-white {
+  filter: invert(1);
+}
+
+.file-input-modern {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  border: 1px solid #d1d5db;
+  background-color: #fff;
+  color: #374151;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.file-input-modern:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3);
+}
+
+.print-preview-area img {
+  width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  margin-bottom: 20px;
+}
+
+.column-filter::placeholder,
+.date-filter::placeholder {
+  font-weight: normal;
+  /* Removes bold styling */
+}
+
+#sheetContainer {
+  margin-bottom: 100px;
+}
+
+/* White strip + blur appears only when sticky */
+#kpiSticky .kpi-backdrop {
+  background: rgba(255, 255, 255, 0.92);
+  -webkit-backdrop-filter: saturate(180%) blur(8px);
+  backdrop-filter: saturate(180%) blur(8px);
+  border-bottom: 1px solid #e5e7eb;
+  /* gray-200 */
+}
+
+#kpiSticky.is-stuck .kpi-backdrop {
+  opacity: 1;
+}
+
+#localSalesBody .detail-row>td {
+  background-color: transparent !important;
+}
+
+#localSalesBody .detail-row table,
+#localSalesBody .detail-row thead,
+#localSalesBody .detail-row tbody tr {
+  background-color: transparent !important;
+}
+
+/* Make the entire inner detail section backgroundless */
+.ls-detail-wrapper,
+.ls-detail-wrapper table,
+.ls-detail-wrapper thead,
+.ls-detail-wrapper tbody,
+.ls-detail-wrapper tr,
+.ls-detail-wrapper th,
+.ls-detail-wrapper td {
+  background: transparent !important;
+}
+
+/* Inputs/textareas: borderless until focused */
+.field-inert,
+.field-inert-number,
+.field-inert-select {
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.field-inert:focus,
+.field-inert-number:focus,
+.field-inert-select:focus {
+  background: #fff;
+  border-color: rgb(209, 213, 219);
+  /* gray-300 */
+  outline: 0;
+  box-shadow: 0 0 0 1px rgba(209, 213, 219, .65);
+}
+
+/* Nicer number alignment */
+.field-inert-number {
+  text-align: right;
+}
+
+/* Plain, borderless textareas that only show chrome on edit */
+.ls-plain {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  resize: none;
+  /* remove the corner handle */
+  width: 100%;
+  min-height: 2.25rem;
+  /* ~36px */
+  padding: .375rem .5rem;
+  /* matches your inputs */
+  line-height: 1.35;
+}
+
+.ls-plain:focus {
+  background: #fff;
+  border: 1px solid #d1d5db;
+  /* gray-300 */
+  border-radius: .5rem;
+  /* rounded */
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, .15);
+  /* ring-blue-500/20 */
+}
+
+.sheet-tab.active {
+  background-color: #01569F;
+  /* indigo-600 */
+  color: #ffffff;
+}
+
+.sheet-tab.active:hover {
+  background-color: #004683;
+  /* indigo-700 */
+  color: #ffffff;
+}

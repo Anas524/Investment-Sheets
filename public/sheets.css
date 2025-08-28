@@ -194,21 +194,14 @@ table td br {
 }
 
 .table-responsive {
-    overflow-x: auto;
-    margin-bottom: 100px !important;
     position: relative !important;
     width: 100%;
-}
-
-.table-responsive thead th {
-    position: sticky;
-    top: 0;
-    z-index: 2; /* Ensure it stays above table body rows */
+    overflow-x: auto;
 }
 
 table {
     table-layout: auto;
-    width: max-content;
+    min-width: 100%;
 }
 
 th,
@@ -264,13 +257,7 @@ body.modal-open {
     width: 15px;
 }
 
-@media (max-width: 675px) {
-    .custom-toggle-inside {
-        bottom: 50px !important;
-        /* Push it above tab buttons */
-        left: 10px;
-    }
-}
+
 
 .bottom-tabs .tabs-wrapper {
     width: 100%;
@@ -304,15 +291,7 @@ body.modal-open {
     border-color: #ffefc1 !important;
 }
 
-#headerIcon[src*="us-client-icon.png"],
-#headerIcon[src*="sq-sheet-icon.png"],
-#headerIcon[src*="rh-sheet-icon.png"],
-#headerIcon[src*="ff-sheet-icon.png"],
-#headerIcon[src*="bl-sheet-icon.png"],
-#headerIcon[src*="ws-sheet-icon.png"],
-#headerIcon[src*="local-sales-icon.png"] {
-    margin-top: 10px;
-}
+
 
 #headerIcon[src*="local-sales-icon.png"] {
     height: 40px;
@@ -326,18 +305,11 @@ body.modal-open {
 
 .table-container {
     width: 100%;
+    max-width: 1400px;
     display: flex;
     justify-content: center;
     padding-bottom: 0 !important;
-    margin-bottom: 0;
-}
-
-.us-client-table,
-.sq-client-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-bottom: 0 !important;
-    table-layout: auto;
+    margin: 0 auto;
 }
 
 .card-body.p-0 {
@@ -346,57 +318,6 @@ body.modal-open {
 
 .card.shadow-sm.border-0.mb-5 {
     margin-bottom: 60px !important;
-}
-
-/* Table cells */
-.us-client-table th,
-.us-client-table td,
-.sq-client-table th,
-.sq-client-table td {
-    text-align: center;
-    vertical-align: middle;
-    padding: 10px;
-    border-left: none !important;
-    border-right: none !important;
-    border-top: 1px solid #dee2e6;
-    /* keep top border */
-    border-bottom: 1px solid #dee2e6;
-    /* keep bottom border */
-}
-
-/* Sticky header */
-.us-client-table thead th,
-.sq-client-table thead th {
-    top: 0;
-    background-color: #212529;
-    color: white;
-    z-index: 2;
-    border-bottom: 1px solid #dee2e6;
-}
-
-/* Allow wrapping ONLY in remarks column */
-.us-client-table th:nth-child(4),
-.us-client-table td:nth-child(4),
-.sq-client-table th:nth-child(4),
-.sq-client-table td:nth-child(4) {
-    white-space: normal;
-    word-wrap: break-word;
-    overflow-wrap: break-word;
-    min-width: 300px;
-    max-width: 500px;
-}
-
-/* Filter input styling */
-.us-client-table thead input.column-filter,
-.sq-client-table thead input.column-filter {
-    width: 100%;
-    box-sizing: border-box;
-}
-
-/* Center-align the date filter input */
-#usDateFilterInput,
-#sqDateFilterInput {
-    text-align: center;
 }
 
 /* Wrap table with scroll container */
@@ -485,17 +406,19 @@ body.modal-open {
 /* #localSalesTable th,
 #localSalesTable td {
 } */
-    
+
 #localSalesTable td:nth-child(4) {
     word-wrap: break-word;
     overflow-wrap: break-word;
     white-space: normal;
     text-overflow: ellipsis;
-    max-width: 180px; /* Description column */
+    max-width: 180px;
+    /* Description column */
 }
 
 #localSalesForm .form-control::placeholder {
-    color: #999 !important; /* Light grey */
+    color: #999 !important;
+    /* Light grey */
     opacity: 1;
 }
 
@@ -510,46 +433,55 @@ body.modal-open {
 }
 
 .card h3 {
-  font-size: 1.8rem;
+    font-size: 1.8rem;
 }
 
 .card h4 {
-  font-size: 1.4rem;
+    font-size: 1.4rem;
 }
 
-.table-sm td, 
+.table {
+    width: 100%;
+    table-layout: auto;
+}
+
+.table-sm td,
 .table-sm th {
-  padding: 0.5rem;
+    padding: 0.5rem;
 }
 
 .table th {
-  white-space: nowrap;
+    white-space: nowrap;
 }
 
 .chart-container {
-  margin-top: 2rem;
+    margin-top: 2rem;
 }
 
 .summary-box h4,
 .summary-box h5 {
-  margin: 0.5rem 0;
+    margin: 0.5rem 0;
+}
+
+.table-striped>tbody>tr:nth-of-type(odd)>* {
+    --bs-table-bg-type: transparent !important;
 }
 
 /* Even rows background color */
-.table-striped > tbody > tr:nth-of-type(even) > * {
+.table-striped>tbody>tr:nth-of-type(even)>* {
     --bs-table-accent-bg: #d1e7dd !important;
     color: black !important;
 }
 
 /* Hover for all rows */
-.table-striped > tbody > tr:hover > * {
+.table-striped>tbody>tr:hover>* {
     --bs-table-accent-bg: #cfe2ff !important;
     color: black !important;
 }
 
 /* Hover include odd rows */
-.table-striped > tbody > tr:hover > td,
-.table-striped > tbody > tr:hover > th {
+.table-striped>tbody>tr:hover>td,
+.table-striped>tbody>tr:hover>th {
     background-color: #cfe2ff !important;
     color: black !important;
 }
@@ -562,42 +494,314 @@ body.modal-open {
     cursor: grabbing;
 }
 
-/* for sticky header and filter row */
-.us-client-table thead tr,
-.sq-client-table thead tr,
-.rh-loan-table thead tr {
-  position: sticky;
-  top: -1px;
-  z-index: 2;
-}
-
-/* Make the filter row appear below header row */
-.us-client-table thead tr:nth-child(2),
-.sq-client-table thead tr:nth-child(2) {
-  top: 39px;
-  z-index: 1;
-}
-
 .rh-loan-ledger-wrapper {
     max-width: 720px;
     margin: 0 auto;
 }
 
 .rh-loan-ledger-wrapper h3 {
-  font-size: 1.8rem;
+    font-size: 1.8rem;
 }
 
 .rh-loan-ledger-wrapper .card h5 {
-  font-size: 1.4rem;
-  font-weight: 600;
+    font-size: 1.4rem;
+    font-weight: 600;
 }
 
 #rhLoanTable th,
 #rhLoanTable td {
-  vertical-align: middle;
-  text-align: center;
+    vertical-align: middle;
+    text-align: center;
 }
 
 #rhLoanTable {
-  width: 100%;
+    width: 100%;
 }
+
+/* For only investment table */
+.investment-table thead th {
+    position: sticky;
+    top: -1px;
+    z-index: 2;
+    background: #d1e7dd;
+}
+
+.investment-table thead tr:nth-child(2) th {
+    top: 60px;
+    z-index: 1;
+    background: #d1e7dd;
+}
+
+.investment-table th,
+.investment-table td {
+    min-width: 100px;
+}
+
+.investment-table th:nth-child(3),
+.investment-table td:nth-child(3),
+.investment-table th:nth-child(4),
+.investment-table td:nth-child(4) {
+    white-space: normal;
+    word-wrap: break-word;
+    max-width: 300px;
+}
+
+.investment-table th:nth-child(5),
+.investment-table td:nth-child(5),
+.investment-table th:nth-child(6),
+.investment-table td:nth-child(6) {
+    white-space: normal;
+    word-wrap: break-word;
+    max-width: 200px;
+}
+
+.investment-table th:nth-child(1),
+.investment-table td:nth-child(1) {
+    white-space: normal;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    min-width: 0;
+    max-width: 75px;
+}
+
+
+@media (max-width: 1092px) {
+    .investment-table thead tr:nth-child(2) th {
+        top: 80px;
+        z-index: 1;
+        background: #d1e7dd;
+    }
+}
+
+@media (max-width: 675px) {
+    .custom-toggle-inside {
+        bottom: 50px !important;
+        /* Push it above tab buttons */
+        left: 10px;
+    }
+}
+
+.main-row {
+    cursor: pointer;
+}
+
+/* Make the table more compact */
+.table-container-investment {
+    width: 80%;
+    max-width: 1400px;
+    text-align: center;
+    margin: 0 auto;
+}
+
+.table-container-investment table {
+    margin: 0 auto;
+}
+
+.custom-investment-table {
+    font-size: 14px;
+    margin: 0 auto;
+    border-collapse: collapse;
+    background: #fff;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+/* Header styling */
+.custom-investment-table thead th {
+    background-color: #d1e7dd;
+    padding: 8px 10px;
+    font-weight: 600;
+    text-align: center;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.custom-investment-table td:nth-child(1) {
+    text-align: center !important;
+}
+
+/* Body cells */
+.custom-investment-table tbody td {
+    padding: 6px 10px;
+    text-align: left;
+    vertical-align: middle;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+/* Even row background */
+.custom-investment-table tbody tr:nth-child(even) td {
+    background-color: #f9fbfc;
+}
+
+/* On hover */
+.custom-investment-table tbody tr:hover td {
+    background-color: #eef7ff;
+    cursor: pointer;
+}
+
+/* Totals row styling (if you have totals rows) */
+.custom-investment-table tbody tr.totals-row td {
+    background-color: #eef7ff;
+    font-weight: 600;
+}
+
+/* Reduce S.No column width */
+.custom-investment-table th:nth-child(1),
+.custom-investment-table td:nth-child(1) {
+    width: 40px;
+    max-width: 40px;
+}
+
+/* Reduce Description column width */
+.custom-investment-table th:nth-child(3),
+.custom-investment-table td:nth-child(3) {
+    max-width: 300px;
+    white-space: normal;
+    word-wrap: break-word;
+}
+
+.custom-investment-table thead input.column-filter {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 4px 6px;
+    font-size: 12px;
+}
+
+/* Split row container */
+.main-row-container {
+    background: #f9fbfc;
+    padding: 10px 15px;
+    border-radius: 4px;
+}
+
+/* Supplier name centered */
+.main-row-header {
+    text-align: center;
+    font-weight: 600;
+    font-size: 15px;
+    margin-bottom: 12px;
+    color: black;
+}
+
+/* Split flex */
+.main-row-split-content {
+    display: flex;
+    justify-content: space-around;
+    align-items: flex-start;
+    gap: 50px;
+    flex-wrap: wrap;
+    width: 100%;
+}
+
+/* Left and right sections */
+.main-row-left,
+.main-row-right {
+    flex: 0 0 auto;
+    min-width: 200px;
+    text-align: left;
+}
+
+.row-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    margin-bottom: 6px;
+}
+
+.row-item .label {
+    font-weight: 600;
+    color: black;
+}
+
+.row-item .value {
+    text-align: right;
+    flex-shrink: 0;
+}
+
+/* Hide icon by default */
+.date-filter-icon {
+    opacity: 0;
+    margin-left: 6px;
+    cursor: pointer;
+    color: black;
+    transition: opacity 0.2s ease;
+}
+
+/* Show icon on hover */
+.value:hover .date-filter-icon {
+    opacity: 1;
+}
+
+.dynamic-textarea {
+    overflow: hidden !important;
+    resize: none !important;
+    min-height: 36px;
+    max-height: 100px;
+    /* Prevent vertical expansion */
+    line-height: 1.4;
+    border: none !important;
+    background: transparent !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+.readonly-textarea {
+    height: auto !important;
+    max-height: 100px;
+    overflow: hidden !important;
+    resize: none !important;
+    border: none !important;
+    background: transparent !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+.field-changed {
+    background-color: #fef9c3 !important;
+    /* Tailwind yellow-100 */
+    border: 1px solid #eab308;
+    /* Tailwind yellow-500 */
+}
+
+#saveTooltipBtn {
+    padding: 5px 12px;
+    font-size: 13px;
+    border-radius: 6px;
+    background-color: #16a34a;
+    /* Tailwind bg-green-600 */
+    color: white;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    white-space: nowrap;
+}
+
+.tooltip-save-button {
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+        opacity: 1;
+    }
+
+    50% {
+        transform: scale(1.1);
+        opacity: 0.8;
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.save-tooltip {
+  position: relative;
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+

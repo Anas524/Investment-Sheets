@@ -126,7 +126,10 @@ class RHClientController extends Controller
             $weight = $validated['weight'] ?? 0;
             $shipping_rate_per_kg = $validated['shipping_rate_per_kg'] ?? 0;
 
-            $total_units = $request->total_units ?? ($no_of_ctns * $units_per_ctn);
+            $total_units = isset($request->total_units) && $request->total_units !== ''
+                ? (float)$request->total_units
+                : ($no_of_ctns * $units_per_ctn);
+
             $total_material = $unit_price * $total_units;
 
             $shipping_rate = $no_of_ctns * $weight * $shipping_rate_per_kg;
@@ -176,7 +179,9 @@ class RHClientController extends Controller
         $latestSrNo = RHClient::max('sr_no') ?? 0;
         $newSrNo = $latestSrNo + 1;
 
-        $total_units = $request->total_units ?? (($request->units_per_ctn ?? 0) * ($request->no_of_ctns ?? 0));
+        $total_units = isset($request->total_units) && $request->total_units !== ''
+            ? (float)$request->total_units
+            : (($request->units_per_ctn ?? 0) * ($request->no_of_ctns ?? 0));
         $unit_price = $request->unit_price ?? 0;
         $total_material = ($request->unit_price ?? 0) * $total_units;
 
@@ -260,7 +265,10 @@ class RHClientController extends Controller
             return response()->json(['error' => 'RHClient not found'], 404);
         }
 
-        $total_units = $request->total_units ?? (($request->units_per_ctn ?? 0) * ($request->no_of_ctns ?? 0));
+        $total_units = isset($request->total_units) && $request->total_units !== ''
+            ? (float)$request->total_units
+            : (($request->units_per_ctn ?? 0) * ($request->no_of_ctns ?? 0));
+
         $unit_price = (float) $request->unit_price;
         $total_material = $unit_price * $total_units;
 
@@ -439,7 +447,10 @@ class RHClientController extends Controller
             return response()->json(['error' => 'Not found'], 404);
         }
 
-        $total_units = $request->total_units ?? (($request->units_per_ctn ?? 0) * ($request->no_of_ctns ?? 0));
+        $total_units = isset($request->total_units) && $request->total_units !== ''
+            ? (float)$request->total_units
+            : (($request->units_per_ctn ?? 0) * ($request->no_of_ctns ?? 0));
+
         $unit_price = $request->unit_price ?? 0;
         $total_material = $unit_price * $total_units;
         $shipping_rate_per_kg = $request->shipping_rate_per_kg ?? 20;

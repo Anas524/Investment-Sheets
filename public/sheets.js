@@ -1,37 +1,25 @@
-// =======================
-// GTS Investment Sheet JS
-// =======================
+$.ajaxSetup({
+    headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
+});
 
-const activeSheet = localStorage.getItem('activeSheet') || 'gts';
+const activeSheet = localStorage.getItem('activeSheet') || 'summary';
 
 const sheetHeaders = {
-    gts: {
-        title: 'GTS Investment',
-        icon: '/images/sub-logo.png',
+    'gts-material': {
+        title: 'GTS Material Entries',
+        icon: '/images/material-sheet-logo.png',
+    },
+    'gts-investment': {
+        title: 'GTS Investment Entries',
+        icon: '/images/investment-sheet-logo.png',
     },
     us: {
         title: 'US Client Payment',
-        icon: '/images/us-client-icon.png',
+        icon: '/images/us-sheet-logo.png',
     },
     sq: {
         title: 'SQ Sheet',
         icon: '/images/sq-sheet-icon.png',
-    },
-    rh: {
-        title: 'RH Sheet',
-        icon: '/images/rh-sheet-icon.png',
-    },
-    ff: {
-        title: 'FF Sheet',
-        icon: '/images/ff-sheet-icon.png',
-    },
-    bl: {
-        title: 'BL Sheet',
-        icon: '/images/bl-sheet-icon.png',
-    },
-    ws: {
-        title: 'WS Sheet',
-        icon: '/images/ws-sheet-icon.png',
     },
     local: {
         title: 'Local Sales',
@@ -39,24 +27,15 @@ const sheetHeaders = {
     },
     summary: {
         title: 'Summary Sheet',
-        icon: '/images/summary-sheet-icon.png',
+        icon: '/images/sub-logo.png',
+    },
+    beneficiary: {
+        title: 'Beneficiary Sheet',
+        icon: '/images/beneficiary-logo.png',
     }
 };
 
-let selectedRowIndex = -1;
-let currentAttachRow = null;
-let pdfHtmlContent = '';
-
-let selectedInvoice = '';
-let selectedRowId = null;
-
-let editingInvoice = '';
-
-let multiEntryData = [];
-let totalSteps = 0;
-let currentStep = 0;
-
-let manualMultiEntryIndex = null;
+const CUSTOMER_SHEET_ICON = '/images/customer-sheet-logo.png';
 
 // US Sheet
 let originalUSClients = [];
@@ -64,856 +43,117 @@ let originalUSClients = [];
 // SQ Sheet
 let originalSQClients = [];
 
-// RH Sheet
-let editingRHSubSerial = null;
-let originalRHClients = [];
-let editingRHId = null;
-
-let rhLoanEntries = [];
-let editingLoanId = null;
-
-// FF Sheet
-let editingFFSubSerial = null;
-let originalFFClients = [];
-let editingFFId = null;
-
-// BL Sheet
-let editingBLSubSerial = null;
-let originalBLClients = [];
-let editingBLId = null;
+function setActiveSheetBtn(sheet) {
+    $('.sheet-tab').removeClass('active').attr('aria-current', 'false');
+    $(`.sheet-tab[data-sheet="${sheet}"]`).addClass('active').attr('aria-current', 'page');
+}
 
 $(document).ready(function () {
+    // Render customer tabs (inline or dropdown)
+    renderCustomerTabs();
 
-    $('.sheet-tab').on('click', function (e) {
+    const initial = localStorage.getItem('activeSheet') || 'summary';
+    setActiveSheetBtn(initial);
+
+    $(document).on("click", ".sheet-tab", function (e) {
         e.preventDefault();
 
         const sheet = $(this).data('sheet');
+
+        setActiveSheetBtn(sheet);
         localStorage.setItem('activeSheet', sheet);
 
-        $('.sheet-tab').removeClass('active btn-primary text-light').addClass('btn-outline-secondary text-dark');
-        $(this).addClass('active btn-primary text-light').removeClass('btn-outline-secondary text-dark');
-
-        $('[id^="sheet-"]').hide();
-        $(`#sheet-${sheet}`).show();
+        const $section = $(`#sheet-${sheet}`);
+        $('.sheet-section').not($section).hide();
+        $section.removeClass('hidden').css('display', 'block');
 
         const header = sheetHeaders[sheet];
-        $('#headerTitle').text(header.title);
-        $('#headerIcon').attr('src', header.icon);
+        if (header) {
+            $('#headerTitle').text(header.title);
+            $('#headerIcon').attr('src', header.icon);
+        } else if (sheet.startsWith('customer-')) {
+            const sheetName = sheet.slice('customer-'.length).toUpperCase(); // safer than split
+            $('#headerTitle').text(`Customer Sheet: ${sheetName}`);
+            $('#headerIcon').attr('src', CUSTOMER_SHEET_ICON); // <-- shared customer logo
 
-        if (sheet === 'us') {
+            // make sure any hidden ancestor is unhidden
+            unhideAncestors($section);
+
+            const sheetId =
+                $section.find('.customer-sheet-id').val() ||
+                $section.find('#customer-sheet-id').val();
+
+            if (sheetId) {
+                if (typeof loadCustomerSheetData === 'function') loadCustomerSheetData(sheetId, $section);
+                if (typeof loadLoanLedger === 'function') loadLoanLedger(sheetId);
+            } else {
+                console.warn('No customer-sheet-id found inside', $section.attr('id'));
+            }
+        }
+
+        if (sheet === 'gts-material') {
+            initMaterialLogic();
+            loadGtsMaterials();
+            fetchAndUpdateInvestmentTotal();
+        } else if (sheet === 'gts-investment') {
+            initInvestmentLogic();
+            loadGtsInvestments();
+            fetchAndUpdateInvestmentTotal();
+        } else if (sheet === 'us') {
             loadUSClients();
         } else if (sheet === 'sq') {
             loadSQClients();
-        } else if (sheet === 'rh') {
-            loadRHClients();
-            initRHLogic();
-        } else if (sheet === 'ff') {
-            loadFFClients();
-            initFFLogic();
-        } else if (sheet === 'bl') {
-            loadBLClients();
-            initBLLogic();
-        } else if (sheet === 'ws') {
-            loadBLClients();
-            initBLLogic();
         } else if (sheet === 'local') {
-            loadLocalSales();
             initLocalLogic();
+            loadLocalSales();
         } else if (sheet === 'summary') {
+            initSummaryLogic();
             loadSummarySheet();
+            ensureCashInSkeleton();
             loadCashInBreakdown();
-            // initSummaryLogic();
+            refreshLoanOutstandingHybrid();
+        } else if (sheet === 'beneficiary') {
+            initBenLogic();
+            loadBeneficiaries();
+            computeAndRenderProfit();
         }
+        $('#headerTitle').css('margin-bottom', sheet === 'summary' ? '0' : '5px');
     });
 
-    $(`.sheet-tab[data-sheet="${activeSheet}"]`).click();
-
-    $(document).on('click', '.delete-btn', function () {
-        const $row = $(this).closest('tr');
-        selectedInvoice = $row.find('td:eq(4)').text().trim();
-        selectedRowId = $row.data('id');
-
-        const isMultiple = $row.find('td:eq(6)').html().includes('<br>'); // Check merged content in description
-
-        if (isMultiple) {
-            $('#deleteMessage').html(`This is a multiple entry.<br><b>Invoice:</b> ${selectedInvoice}<br>Enter sub-serial number or type "all" to delete all rows.`);
-            $('#subSerialInputWrapper').show();
-        } else {
-            $('#deleteMessage').text('Are you sure you want to delete this row?');
-            $('#subSerialInputWrapper').hide();
-        }
-
-        $('#deleteConfirmModal').modal('show');
-    });
-
-    $('#confirmDeleteBtn').on('click', function () {
-        const isSubSerialInputVisible = $('#subSerialInputWrapper').is(':visible');
-        const subSerial = $('#deleteSubSerialInput').val().trim().toLowerCase();
-
-        let url = '';
-
-        if (isSubSerialInputVisible) {
-            if (!subSerial) {
-                alert('Please enter a sub-serial number or "all".');
-                return;
-            }
-
-            url = `/delete-investment-by-invoice/${encodeURIComponent(selectedInvoice)}?sub_serial=${subSerial}`;
-        } else {
-            if (!selectedRowId) {
-                alert('Missing row ID. Cannot delete.');
-                return;
-            }
-
-            url = `/delete-investment/${selectedRowId}`;
-        }
-
-        $.ajax({
-            url: url,
-            type: 'DELETE',
-            headers: {
-                'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
-            },
-            success: function () {
-                location.reload();
-            },
-            error: function (xhr) {
-                alert(xhr.responseJSON?.error || 'Failed to delete!');
-            },
-            complete: function () {
-                $('#deleteConfirmModal').modal('hide');
-                $('#deleteSubSerialInput').val('');
-            }
-        });
-    });
-
-    $(document).on('click', '.edit-btn', function () {
-        const $row = $(this).closest('tr');
-        const id = $row.data('id');
-        const invoice = $row.find('td:eq(4)').text().trim();
-        let subSerials = $row.data('subserials');
-
-        if (typeof subSerials === 'string') {
-            try {
-                subSerials = JSON.parse(subSerials);
-            } catch (e) {
-                subSerials = [];
-            }
-        }
-
-        if (Array.isArray(subSerials) && subSerials.length > 1) {
-            // Show modal for sub-serial selection
-            $('#editModalInvoice').val(invoice);
-            $('#editSubSerialInput').val('');
-            $('#editSubSerialModal').modal('show');
-        } else {
-            // Directly fetch single-entry row
-            fetchAndFillEditForm(id);
-        }
-    });
-
-    $('#confirmEditSubSerialBtn').on('click', function () {
-        const invoice = $('#editModalInvoice').val().trim();
-        const subSerial = $('#editSubSerialInput').val().trim();
-
-        if (!invoice || !subSerial) {
-            alert('Please enter sub-serial number.');
-            return;
-        }
-
-        $.ajax({
-            url: `/get-investment-by-invoice/${encodeURIComponent(invoice)}/${subSerial}`,
-            type: 'GET',
-            success: function (data) {
-                if (!data || !data.id) {
-                    alert("Sub-entry not found.");
-                    return;
-                }
-
-                $('#editSubSerialModal').modal('hide');
-                fetchAndFillEditForm(data.id);
-            },
-            error: function () {
-                alert("Failed to fetch sub-entry.");
-            }
-        });
-    });
-
-    $(document).on('click', '.copy-btn', function () {
-        const $row = $(this).closest('tr');
-        const id = $row.data('id');
-        const invoiceNumber = $row.find('td:eq(4)').text().trim();
-        let subSerials = $row.data('subserials');
-
-        // Parse subSerials if string
-        if (typeof subSerials === 'string') {
-            try {
-                const parsed = JSON.parse(subSerials);
-                if (Array.isArray(parsed)) {
-                    subSerials = parsed;
-                }
-            } catch (e) {
-                subSerials = [];
-            }
-        }
-
-        if (Array.isArray(subSerials) && subSerials.length > 1) {
-            // Multiple-entry row → ask which sub-entry to copy
-            $('#copyModalInvoice').val(invoiceNumber);
-            $('#copyModalInvoiceText').text(`Invoice: ${invoiceNumber}`);
-            $('#copySubSerialInput').val('');
-            $('#copySubSerialModal').modal('show');
-        } else {
-            // Normal row → copy directly
-            $('#date').val($row.data('date'));
-            $('#supplier').val($row.find('td:eq(2)').text().trim());
-            $('#buyer').val($row.find('td:eq(3)').text().trim());
-            $('#invoice').val($row.data('invoice'));
-            $('#transaction').val($row.find('td:eq(5)').text().trim());
-            $('#description').val($row.find('td:eq(6)').text().trim());
-            $('#ctns').val($row.find('td:eq(7)').text().trim());
-            $('#unitsPerCtn').val($row.find('td:eq(8)').text().trim());
-            $('#unitPrice').val(parseFloat($row.find('td:eq(9)').text().replace(/[^\d.]/g, '')));
-            $('#vatPercentage').val($row.data('vatpercentage'));
-            $('#weight').val($row.find('td:eq(14)').text().trim());
-            $('#shippingRatePerKg').val($row.data('shippingrate'));
-            $('#remarks').val($row.find('td:eq(20)').text().trim());
-
-            $('#investmentForm').removeData('edit-index').removeData('edit-id');
-            $('#submitBtn').show();
-            $('#saveChangesBtn').hide();
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-        }
-    });
-
-    $('#confirmCopySubSerialBtn').on('click', function () {
-        const invoice = $('#copyModalInvoice').val().trim();
-        const subSerial = $('#copySubSerialInput').val().trim();
-
-        if (!invoice || !subSerial) {
-            alert('Please enter a valid sub-serial number.');
-            return;
-        }
-
-        $.ajax({
-            url: `/get-investment-by-invoice/${encodeURIComponent(invoice)}/${subSerial}`,
-            type: 'GET',
-            success: function (data) {
-                if (!data || !data.id) {
-                    alert("Sub-entry not found.");
-                    return;
-                }
-
-                $('#copySubSerialModal').modal('hide');
-
-                // Fill form with copied values
-                $('#date').val(data.date);
-                $('#supplier').val(data.supplier_name);
-                $('#buyer').val(data.buyer);
-                $('#invoice').val(data.invoice_number);
-                $('#transaction').val(data.transaction_mode);
-                $('#description').val(data.description);
-                $('#ctns').val(data.no_of_ctns);
-                $('#unitsPerCtn').val(data.units_per_ctn);
-                $('#unitPrice').val(data.unit_price);
-                $('#vatPercentage').val(data.vat_percentage);
-                $('#weight').val(data.weight);
-                $('#shippingRatePerKg').val(data.shipping_rate_per_kg);
-                $('#remarks').val(data.remarks);
-
-                $('#investmentForm').removeData('edit-index').removeData('edit-id');
-                $('#submitBtn').show();
-                $('#saveChangesBtn').hide();
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-            },
-            error: function () {
-                alert("Failed to fetch sub-entry for copy.");
-            }
-        });
-    });
-
-    $(document).on('click', '.upload-btn', function () {
-        currentAttachRow = $(this).closest('tr');
-        const investmentId = currentAttachRow.data('id');
-        $('#attachRowId').val(investmentId);
-        $('#attachmentForm')[0].reset(); // Clear previous files
-        $('#attachmentModal').modal('show');
-    });
-
-    $(document).on('click', '.view-btn', function () {
-        const row = $(this).closest('tr');
-        const id = row.data('id');
-
-        $.ajax({
-            url: `/get-attachments/${id}`,
-            type: 'GET',
-            success: function (data) {
-                const container = $('#pdfContentForDownload');
-                container.empty();
-
-                const addImageBlock = (title, url) => {
-                    if (!url) return '';
-
-                    url = url.replace(/(attachments\/invoice\/)+/, 'attachments/invoice/');
-                    url = url.replace(/(attachments\/receipt\/)+/, 'attachments/receipt/');
-                    url = url.replace(/(attachments\/note\/)+/, 'attachments/note/');
-
-                    return `
-                            <div class="pdf-block">
-                                <p class="pdf-title"><strong>${title}:</strong></p>
-                                <img src="${url}" class="pdf-image" />
-                            </div>
-                        `;
-                };
-
-                let content = '';
-                content += addImageBlock("Invoice", data.invoice);
-                content += addImageBlock("Bank Transfer Receipt", data.receipt);
-                content += addImageBlock("Delivery Note", data.note);
-
-                container.html(content);
-                $('#viewAttachmentModal').modal('show');
-            },
-            error: function () {
-                alert("Failed to fetch attachments.");
-            }
-        });
-    });
-
-    $.ajaxSetup({
-        headers: {
-            'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
-        }
-    });
-
-    $('#investmentForm').on('submit', function (e) {
-        e.preventDefault();
-
-        const ctns = parseFloat($('#ctns').val()) || 0;
-        const unitsPerCtn = parseFloat($('#unitsPerCtn').val()) || 0;
-        const totalUnits = ctns * unitsPerCtn;
-
-        // If totalUnits is 0, ask user to enter manually
-        if (totalUnits === 0) {
-            $('#manualUnitsModal').modal('show');
-            return; // Stop here until manual entry is provided
-        }
-
-        // Otherwise, set the hidden field and trigger manual-submit
-        $('#totalUnitsHidden').val(totalUnits);
-        $('#investmentForm').trigger('manual-submit');
-    });
-    $('#investmentForm').on('manual-submit', function (e) {
-        e.preventDefault();
-
-        const invoice = $('#invoice').val().trim();
-        const editIndex = $(this).data('edit-index');
-
-        const date = $('#date').val();
-        const supplier = $('#supplier').val();
-        const buyer = $('#buyer').val();
-        const transaction = $('#transaction').val();
-        const unitPrice = parseFloat($('#unitPrice').val()) || 0;
-        const description = $('#description').val();
-        const ctns = parseFloat($('#ctns').val()) || 0;
-        const unitsPerCtn = parseFloat($('#unitsPerCtn').val()) || 0;
-        const totalUnits = parseFloat($('#totalUnitsHidden').val()) || 0;
-        const weight = parseFloat($('#weight').val()) || 0;
-        const vatPercentage = parseFloat($('#vatPercentage').val()) || 0;
-        const shippingRatePerKg = parseFloat($('#shippingRatePerKg').val()) || 0;
-        const remarks = $('#remarks').val();
-
-        const totalMaterial = unitPrice * totalUnits;
-        const shippingRate = ctns * weight * shippingRatePerKg;
-        const dgd = (135 / 15) * ctns;
-        const labour = ctns * 10;
-        const shippingCost = shippingRate + dgd + labour;
-        const vatAmount = (unitPrice * totalUnits) * (vatPercentage / 100);
-        let totalMaterialWithVAT = totalMaterial + vatAmount;
-
-        const formattedDate = date;
-
-        $.ajax({
-            url: '/save-investment',
-            method: 'POST',
-            data: {
-                _token: $('meta[name="csrf-token"]').attr('content'),
-                date,
-                supplier_name: supplier,
-                buyer,
-                invoice_number: invoice,
-                transaction_mode: transaction,
-                unit_price: unitPrice,
-                description,
-                no_of_ctns: ctns,
-                units_per_ctn: unitsPerCtn,
-                total_units: totalUnits,
-                weight,
-                vat_percentage: vatPercentage,
-                shipping_rate_per_kg: shippingRatePerKg,
-                remarks
-            },
-            success: function (response) {
-                const invoice = response.invoice_number;
-
-                const lastSrNo = $('table tbody tr').last().find('td:eq(0)').text().trim();
-                const newSrNo = isNaN(lastSrNo) ? 1 : parseInt(lastSrNo) + 1;
-
-                const newRow = `
-                        <tr data-date="${date}" data-shippingrate="${shippingRatePerKg}" data-vatpercentage="${vatPercentage}" data-invoice="${invoice}">
-                            <td data-bs-toggle="tooltip" title="SR.NO">${newSrNo}</td>
-                            <td data-bs-toggle="tooltip" title="DATE">${formattedDate}</td>
-                            <td data-bs-toggle="tooltip" title="SUPPLIER NAME">${supplier}</td>
-                            <td data-bs-toggle="tooltip" title="BUYER">${buyer}</td>
-                            <td data-bs-toggle="tooltip" title="INVOICE NUMBER">${invoice}</td>
-                            <td data-bs-toggle="tooltip" title="MODE OF TRANSACTION">${transaction}</td>
-                            <td data-bs-toggle="tooltip" title="DESCRIPTION">${description}</td>
-                            <td data-bs-toggle="tooltip" title="NO OF CTNS">${ctns}</td>
-                            <td data-bs-toggle="tooltip" title="UNITS/CTN">${unitsPerCtn}</td>
-                            <td data-bs-toggle="tooltip" title="UNIT PRICE">AED ${unitPrice.toFixed(2)}</td>
-                            <td data-bs-toggle="tooltip" title="TOTAL NO OF UNITS">${totalUnits}</td>
-                            <td data-bs-toggle="tooltip" title="VAT">AED ${vatAmount.toFixed(2)}</td>
-                            <td data-bs-toggle="tooltip" title="TOTAL MATERIAL EXCLUDING VAT">AED ${totalMaterial.toFixed(2)}</td>
-                            <td data-bs-toggle="tooltip" title="TOTAL MATERIAL INCLUDING VAT">AED ${totalMaterialWithVAT.toFixed(2)}</td>
-                            <td data-bs-toggle="tooltip" title="WEIGHT IN KG">${weight}</td>
-                            <td data-bs-toggle="tooltip" title="SHIPPING RATE">AED ${shippingRate.toFixed(2)}</td>
-                            <td data-bs-toggle="tooltip" title="DGD">AED ${dgd.toFixed(2)}</td>
-                            <td data-bs-toggle="tooltip" title="LABOUR">AED ${labour.toFixed(2)}</td>
-                            <td data-bs-toggle="tooltip" title="SHIPPING COST">AED ${shippingCost.toFixed(2)}</td>
-                            <td data-bs-toggle="tooltip" title="REMARKS">${remarks}</td>
-                            <td>
-                                <button class="btn btn-sm btn-success edit-btn mb-1">Edit</button>
-                                <button class="btn btn-sm btn-danger delete-btn mb-1">Delete</button>
-                                <button class="btn btn-sm btn-secondary copy-btn mb-1">Copy</button>
-                            </td>
-                            <td>
-                                <button class="btn btn-sm btn-light upload-btn mb-1 border">Upload</button>
-                                <button class="btn btn-sm btn-dark view-btn mb-1">View</button>
-                            </td>
-                        </tr>`;
-
-                $('table tbody').append(newRow);
-
-                updateSummaryCards();
-                $('[data-bs-toggle="tooltip"]').tooltip('dispose').tooltip();
-
-                $('#investmentForm')[0].reset();
-                $('#multiEntryModal').modal('hide');
-                $('#submitBtn').show();
-                $('#saveChangesBtn').hide();
-
-                localStorage.setItem('scrollToBottomAfterReload', 'true');
-                location.reload();
-            },
-            error: function (xhr) {
-                console.error('Save Error:', xhr.responseText);
-                alert('Failed to save investment!');
-            }
-        });
-    });
-
-    $('#saveChangesBtn').on('click', function () {
-        const id = $('#investmentForm').data('edit-id');
-        if (!id) {
-            alert("Missing record ID to edit.");
-            return;
-        }
-
-        // Collect fields
-        const ctns = parseFloat($('#ctns').val()) || 0;
-        const unitsPerCtn = parseFloat($('#unitsPerCtn').val()) || 0;
-        let totalUnits = ctns * unitsPerCtn || parseFloat($('#totalUnitsHidden').val()) || 0;
-
-        // Check if total units are still missing
-        if (totalUnits === 0) {
-            $('#manualUnitsModal').modal('show');
-
-            // Save edit id to resume later
-            $('#manualUnitsModal').data('edit-id', id);
-
-            return; // Stop here
-        }
-
-        // Proceed with saving
-        submitEdit(id, totalUnits);
-    });
-
-    $('[data-bs-toggle="tooltip"]').tooltip();
-
-    $('#confirmManualUnitsBtn').on('click', function () {
-        const manualUnits = parseFloat($('#manualTotalUnitsInput').val()) || 0;
-
-        if (manualUnits <= 0) {
-            alert('Please enter a valid total no of units.');
-            return;
-        }
-
-        $('#totalUnitsHidden').val(manualUnits);
-        $('#manualUnitsModal').modal('hide');
-
-        // Check if we are in EDIT mode
-        const editId = $('#manualUnitsModal').data('edit-id');
-
-        if (editId) {
-            // Clear edit id after use
-            $('#manualUnitsModal').removeData('edit-id');
-            // Proceed with saving the edit
-            submitEdit(editId, manualUnits);
-        } else {
-            // Proceed with normal add new row
-            $('#investmentForm').trigger('manual-submit');
-        }
-    });
-
-    $('#openMultiEntryModalBtn').on('click', function () {
-        isMultipleEntry = 1;
-        $('#multiEntryModal').modal('show');
-    });
-
-    if (localStorage.getItem('scrollToBottomAfterReload') === 'true') {
-        setTimeout(function () {
-            window.scrollTo({
-                top: document.body.scrollHeight,
-                behavior: 'smooth'
-            });
-            localStorage.removeItem('scrollToBottomAfterReload');
-        }, 1000);
+    const $btn = $(`.sheet-tab[data-sheet="${activeSheet}"]`);
+    if ($btn.length) {
+        $btn.trigger('click');
+    } else {
+        // 4) FALLBACK: bootstrap Summary if no tab matched (first load / SSR)
+        localStorage.setItem('activeSheet', 'summary');
+
+        $('[id^="sheet-"]').hide();
+        $('#sheet-summary').show();
+        setActiveSheetBtn('summary');
+        // run the loaders so KPI, chart, breakdowns, and LOANS render on reload
+        initSummaryLogic();
+        loadSummarySheet();
+        loadCashInBreakdown();
+        refreshLoanOutstandingHybrid();
     }
 
-    $('#attachmentForm').on('submit', function (e) {
-        e.preventDefault();
+    // This is where you put the handler for the "Investment Layout" button
+    $("#selectInvestmentBtn").on("click", function () {
+        $("#typeSelectModal").addClass("hidden").removeClass("flex");
+        $('.sheet-tab[data-sheet="gts-investment"]').click();
+        // If you want to auto-show Add Row modal:
+        setTimeout(() => {
+            $("#addInvestmentRowBtn").click();
+        }, 300);
+    });
 
-        const id = $('#attachRowId').val();
-        const formData = new FormData(this);
-
-        $.ajax({
-            url: `/upload-attachments/${id}`,
-            type: 'POST',
-            data: formData,
-            contentType: false,
-            processData: false,
-            headers: {
-                'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
-            },
-            success: function (res) {
-                alert(res.message);
-                $('#attachmentModal').modal('hide');
-                location.reload(); // Reload to show updated view/download
-            },
-            error: function () {
-                alert('Upload failed. Please try again.');
-            }
+    // near top of sheets.js
+    $(document).off('submit.blockUpdate')
+        .on('submit.blockUpdate', 'form[action$="/update-customer-sheet"]', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.warn('Blocked legacy submit to /update-customer-sheet');
         });
-    });
-
-    $('.column-filter').on('keyup change', function () {
-        const index = $(this).data('index');
-        const filterValue = $(this).val().toLowerCase();
-
-        $('table tbody tr').each(function () {
-            const cellText = $(this).find('td').eq(index).text().toLowerCase();
-            $(this).toggle(cellText.includes(filterValue));
-        });
-    });
-
-    $('#start-entry-btn').click(function () {
-        totalSteps = parseInt($('#number-of-entries').val());
-        if (!totalSteps || totalSteps < 1) return alert('Enter a valid number');
-
-        $('#multi-step-wrapper').hide();
-        $('#entry-fields-container').show();
-        currentStep = 1;
-        showEntryForm(currentStep);
-    });
-
-    $('#next-entry-btn').click(function () {
-        const inputs = $('#entry-form-fields').find('input');
-        let entry = {};
-
-        inputs.each(function () {
-            const name = $(this).attr('name');
-            const val = $(this).val();
-            entry[name] = val || '';
-        });
-
-        const ctns = parseFloat(entry.no_of_ctns) || 0;
-        const unitsPerCtn = parseFloat(entry.units_per_ctn) || 0;
-        const manualUnits = parseFloat(entry.manual_total_units) || 0;
-
-        // Save current entry temporarily
-        multiEntryData[currentStep - 1] = entry;
-
-        // Check for missing CTNS or Units/CTN
-        if ((ctns === 0 || unitsPerCtn === 0) && manualUnits === 0) {
-            $('.manual-units-wrapper').show();
-            return; // Still missing manual fallback – stop
-        }
-
-        // Proceed
-        if (currentStep === totalSteps) {
-            $('#next-entry-btn').addClass('d-none');
-            $('#submit-multi-entry').removeClass('d-none');
-        } else {
-            currentStep++;
-            showEntryForm(currentStep);
-        }
-
-        $('#prev-entry-btn').toggle(currentStep > 1);
-    });
-
-    $('#prev-entry-btn').click(function () {
-        if (currentStep > 1) {
-            currentStep--;
-            showEntryForm(currentStep);
-            $('#submit-multi-entry').addClass('d-none');
-            $('#next-entry-btn').removeClass('d-none');
-        }
-        $('#prev-entry-btn').toggle(currentStep > 1);
-    });
-
-    $('#multi-entry-form').submit(function (e) {
-        e.preventDefault();
-
-        const invoiceNumber = $('#invoice').val().trim();
-        if (!invoiceNumber) {
-            alert("Please enter a valid invoice number.");
-            return;
-        }
-
-        const date = $('#date').val();
-        const supplier = $('#supplier').val();
-        const buyer = $('#buyer').val();
-        const transaction = $('#transaction').val();
-
-        // Validate entries
-        for (let i = 0; i < multiEntryData.length; i++) {
-            const entry = multiEntryData[i];
-            const ctns = parseFloat(entry.no_of_ctns) || 0;
-            const unitsPerCtn = parseFloat(entry.units_per_ctn) || 0;
-            const manualUnits = parseFloat(entry.manual_total_units) || 0;
-
-            if ((ctns === 0 || unitsPerCtn === 0) && manualUnits === 0) {
-                alert(`Entry ${i + 1}: Please provide either CTNS + Units/CTN or Total Units`);
-                return;
-            }
-        }
-
-        // Prepare all entries
-        const preparedEntries = multiEntryData.map(entry => {
-            const totalUnits =
-                parseFloat(entry.total_units) ||
-                ((parseFloat(entry.no_of_ctns) > 0 && parseFloat(entry.units_per_ctn) > 0)
-                    ? parseFloat(entry.no_of_ctns) * parseFloat(entry.units_per_ctn)
-                    : parseFloat(entry.manual_total_units) || 0);
-
-            return {
-                unit_price: entry.unit_price,
-                vat_percentage: entry.vat_percentage,
-                description: entry.description,
-                no_of_ctns: entry.no_of_ctns,
-                units_per_ctn: entry.units_per_ctn,
-                total_units: totalUnits,
-                weight: entry.weight,
-                shipping_rate: entry.shipping_rate,
-                remarks: entry.remarks
-            };
-        });
-
-        // Only ONE request
-        $.ajax({
-            url: '/store-multiple-entry',
-            method: 'POST',
-            data: {
-                _token: $('meta[name="csrf-token"]').attr('content'),
-                date,
-                supplier_name: supplier,
-                buyer,
-                invoice_number: invoiceNumber,
-                transaction_mode: transaction,
-                entries: preparedEntries
-            },
-            success: function () {
-                $('#multiEntryModal').modal('hide');
-                localStorage.setItem('scrollToBottomAfterReload', 'true');
-                location.reload();
-            },
-            error: function (xhr) {
-                console.error(xhr.responseText);
-                alert('Error saving multiple entries.');
-            }
-        });
-    });
-
-    $('#filteredExcelBtn').on('click', function () {
-        const wb = XLSX.utils.book_new();
-        const wsData = [];
-
-        // Table Headers
-        const headers = [];
-        $('table thead tr:eq(0) th').each(function (index) {
-            if (index < 21) { // Ignore Action and Attachment
-                headers.push($(this).text().trim());
-            }
-        });
-        wsData.push(headers);
-
-        // Filtered Visible Rows Only
-        $('table tbody tr:visible').each(function () {
-            const cells = $(this).find('td');
-            const allColumns = [];
-
-            cells.each(function (i) {
-                if (i < 21) { // Skip last two columns
-                    const text = $(this).text().trim();
-                    let parts;
-
-                    if (i >= 7 && i <= 20) {
-                        // Number fields (like price, totals, etc.)
-                        parts = text.match(/\d+\.\s(?:[^\d\n]*\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/g);
-                    } else {
-                        // Description and other text fields
-                        parts = text.match(/\d+\.\s[^\n]+/g);
-                    }
-
-                    allColumns.push(parts ? parts.map(p => p.trim()) : [text]);
-                }
-            });
-
-            const maxLines = Math.max(...allColumns.map(col => col.length));
-
-            for (let i = 0; i < maxLines; i++) {
-                const row = [];
-
-                allColumns.forEach((col, index) => {
-                    row.push(i === 0 ? (col[i] || '') : (col.length > 1 ? (col[i] || '') : ''));
-                });
-
-                wsData.push(row);
-            }
-        });
-
-        const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-        // Wrap text in Excel cells
-        const range = XLSX.utils.decode_range(ws['!ref']);
-        for (let R = range.s.r; R <= range.e.r; ++R) {
-            for (let C = range.s.c; C <= range.e.c; ++C) {
-                const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
-                if (!ws[cellRef]) continue;
-                if (!ws[cellRef].s) ws[cellRef].s = {};
-                ws[cellRef].s.alignment = { wrapText: true };
-            }
-        }
-
-        XLSX.utils.book_append_sheet(wb, ws, "Filtered Data");
-        XLSX.writeFile(wb, 'filtered_investment_data.xlsx');
-    });
-
-    $(document).on('input', '.ctns-input, .units-per-ctn-input', function () {
-        const $row = $(this).closest('.row');
-        const ctns = parseFloat($row.find('[name="no_of_ctns"]').val()) || 0;
-        const units = parseFloat($row.find('[name="units_per_ctn"]').val()) || 0;
-
-        if (ctns === 0 || units === 0) {
-            $row.find('.manual-units-wrapper').show();
-        } else {
-            $row.find('.manual-units-wrapper').hide();
-            $row.find('[name="manual_total_units"]').val('');
-        }
-    });
-
-    // Toggle popup on input click
-    $('#dateFilterTrigger').on('click', function () {
-        const popup = $('#datePopup');
-        const trigger = $(this);
-        const popupHeight = popup.outerHeight();
-        const offset = trigger.offset();
-        const scrollTop = $(window).scrollTop();
-        const windowHeight = $(window).height();
-
-        let topPosition = offset.top + trigger.outerHeight() + 8; // below input by default
-
-        // Check if popup will overflow screen bottom
-        if ((topPosition - scrollTop + popupHeight) > windowHeight) {
-            topPosition = offset.top - popupHeight - 10; // position above input
-        }
-
-        popup.css({
-            top: topPosition,
-            left: offset.left
-        }).fadeIn();
-    });
-
-    // Hide when clicked outside
-    $(document).on('click', function (e) {
-        if (!$(e.target).closest('#dateFilterTrigger, #datePopup').length) {
-            $('#datePopup').fadeOut();
-        }
-    });
-
-    // Apply filter
-    $('#applyDateFilter').on('click', function () {
-        const fromDate = $('#fromDate').val();
-        const toDate = $('#toDate').val();
-
-        if (!fromDate || !toDate) {
-            alert('Please select both From and To dates.');
-            return;
-        }
-
-        // Update placeholder in dd-mm-yyyy format
-        const formatDate = d => {
-            const parts = d.split("-");
-            return `${parts[2]}-${parts[1]}-${parts[0]}`;
-        };
-        $('#dateFilterTrigger').val(`${formatDate(fromDate)} to ${formatDate(toDate)}`);
-
-        $('#datePopup').fadeOut();
-
-        // Apply filter to date column (index 1)
-        $('table tbody tr').each(function () {
-            const cell = $(this).find('td:eq(1)').text().trim();
-            const rowDate = parseRowDate(cell);
-
-            if (rowDate >= fromDate && rowDate <= toDate) {
-                $(this).show();
-            } else {
-                $(this).hide();
-            }
-        });
-
-        // Show filtered download button only when filtered
-        const totalRows = $('table tbody tr').length;
-        const visibleRows = $('table tbody tr:visible').length;
-
-        if (visibleRows > 0 && visibleRows < totalRows) {
-            $('#filteredExcelBtn').removeClass('d-none');
-        } else {
-            $('#filteredExcelBtn').addClass('d-none');
-        }
-    });
-
-    // Clear filter
-    $('#clearDateFilter').on('click', function () {
-        $('#fromDate').val('');
-        $('#toDate').val('');
-        $('#dateFilterTrigger').val('');
-        $('#datePopup').fadeOut();
-
-        // Show all rows
-        $('table tbody tr').show();
-        $('#filteredExcelBtn').addClass('d-none');
-    });
-
-    // Enable tooltip
-    const toggleEl = document.querySelector('#customToggle');
-    new bootstrap.Tooltip(toggleEl);
-
-    // Toggle sideMenu
-    $('#customToggle').on('click', function () {
-        const offcanvas = bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('sideMenu'));
-        offcanvas.toggle();
-    });
 
     // =======================
     // US CLIENT PAYMENT JS
@@ -924,7 +164,7 @@ $(document).ready(function () {
     $(document).on('click', '.delete-us-btn', function () {
         const id = $(this).data('id');
         $('#usDeleteId').val(id);
-        $('#usDeleteModal').modal('show');
+        $('#usDeleteModal').removeClass('hidden').addClass('flex');
     });
 
     $('#confirmUsDeleteBtn').on('click', function () {
@@ -937,7 +177,7 @@ $(document).ready(function () {
                 _token: $('meta[name="csrf-token"]').attr('content')
             },
             success: function (response) {
-                $('#usDeleteModal').modal('hide');
+                $('#usDeleteModal').addClass('hidden').removeClass('flex');
                 $('button[data-id="' + id + '"]').closest('tr').remove();
                 loadUSClients();
             },
@@ -954,7 +194,7 @@ $(document).ready(function () {
         editingId = tr.data('id');
 
         const rawDate = tr.data('date');
-        const amount = tr.find('td:eq(2)').text().replace('AED', '').trim();
+        const amount = tr.find('td:eq(2)').text().replace('AED', '').replace(/,/g, '').trim();
         const remarks = tr.find('td:eq(3)').text().trim();
 
         $('#usDate').val(rawDate);
@@ -1013,84 +253,69 @@ $(document).ready(function () {
         }
     });
 
-    $('#downloadExcelBtn').on('click', function () {
-        const activeSheet = localStorage.getItem('activeSheet') || 'gts';
-
-        if (activeSheet === 'gts') {
-            exportGTSExcel();
-        } else if (activeSheet === 'us') {
-            exportUSClientExcel();
-        } else if (activeSheet === 'sq') {
-            exportSQExcel();
-        } else if (activeSheet === 'rh') {
-            exportRHExcel();
-        } else if (activeSheet === 'ff') {
-            exportFFExcel();
-        } else if (activeSheet === 'bl') {
-            exportBLExcel();
-        } else if (activeSheet === 'local') {
-            exportLOCALExcel();
-        } else {
-            alert('No export available for this sheet.');
-        }
-    });
-
+    // Show popup
     $('#usDateFilterInput').on('click', function () {
-        const $input = $(this);
-        const $popup = $('#usDatePopup');
-        const popupHeight = $popup.outerHeight();
-        const inputOffset = $input.offset();
-        const scrollTop = $(window).scrollTop();
-        const windowHeight = $(window).height();
+        const $popup = $('#usDateFilterPopup');
+        const inputRect = this.getBoundingClientRect();
+        const spaceBelow = window.innerHeight - inputRect.bottom;
+        const spaceAbove = inputRect.top;
 
-        let topPosition = inputOffset.top + $input.outerHeight() + 5; // default below
+        // Show popup and decide direction
+        $popup.removeClass('top-full bottom-full mt-1 mb-1');
 
-        // If there's not enough space below, show above
-        if ((topPosition - scrollTop + popupHeight) > windowHeight) {
-            topPosition = inputOffset.top - popupHeight - 5;
+        if (spaceBelow < 260 && spaceAbove > 260) {
+            $popup.addClass('bottom-full mb-1'); // show above
+        } else {
+            $popup.addClass('top-full mt-1'); // show below
         }
 
-        // Horizontal alignment (already fine)
-        let leftPosition = inputOffset.left;
-        const popupWidth = $popup.outerWidth();
-        const windowWidth = $(window).width();
-        if ((leftPosition + popupWidth) > windowWidth) {
-            leftPosition = windowWidth - popupWidth - 10;
-        }
-
-        $popup.css({
-            position: 'absolute',
-            top: `${topPosition}px`,
-            left: `${leftPosition}px`,
-            zIndex: 9999
-        }).appendTo('body').fadeIn();
+        $popup.removeClass('hidden');
     });
 
+    // Hide popup when clicking outside
     $(document).on('click', function (e) {
-        if (!$(e.target).closest('#usDateFilterInput, #usDatePopup').length) {
-            $('#usDatePopup').fadeOut();
+        if (!$(e.target).closest('#usDateFilterPopup, #usDateFilterInput').length) {
+            $('#usDateFilterPopup').addClass('hidden');
         }
     });
 
-    $('#applyUSDateFilter').on('click', function () {
-        const from = $('#usFromDate').val();
-        const to = $('#usToDate').val();
-        if (!from || !to) return alert('Please select both dates.');
+    // Apply filter
+    $('#applyUsDateFilterBtn').on('click', function () {
+        const from = $('#usDateFilterFrom').val();
+        const to = $('#usDateFilterTo').val();
 
-        const filtered = originalUSClients.filter(item => item.date >= from && item.date <= to);
-        renderUSClients(filtered);
+        if (!from || !to) {
+            alert("Please select both dates.");
+            return;
+        }
 
-        $('#usFilteredExcelBtn').removeClass('d-none');
-        $('#usDatePopup').fadeOut();
+        const fromDate = new Date(from);
+        const toDate = new Date(to);
+        toDate.setHours(23, 59, 59, 999); // Include full day
 
-        $('#usDateFilterInput').val(`${from} to ${to}`);
+        $('#us-client-body tr').each(function () {
+            // Use raw data-date from the <tr>
+            const rowDateStr = $(this).data('date'); // e.g., "2025-03-04"
+            const rowDate = new Date(rowDateStr);
+            rowDate.setHours(12); // Normalize to avoid timezone issues
+
+            if (rowDate >= fromDate && rowDate <= toDate) {
+                $(this).show();
+            } else {
+                $(this).hide();
+            }
+        });
+
+        $('#usDateFilterPopup').addClass('hidden');
     });
 
-    $('#clearUSDateFilter').on('click', function () {
-        renderUSClients(originalUSClients);
-        $('#usFilteredExcelBtn').addClass('d-none');
+    // Clear filter
+    $('#clearUsDateFilterBtn').on('click', function () {
+        $('#usDateFilterFrom').val('');
+        $('#usDateFilterTo').val('');
         $('#usDateFilterInput').val('');
-        $('#usDatePopup').fadeOut();
+
+        $('#us-client-body tr').show();
     });
 
     $('#usFilteredExcelBtn').on('click', function () {
@@ -1113,6 +338,29 @@ $(document).ready(function () {
         XLSX.writeFile(wb, "us_client_filtered.xlsx");
     });
 
+    $(document).on('input', '.column-filter', function () {
+        const filters = [];
+
+        // Store each filter value along with its column index
+        $('.column-filter').each(function () {
+            filters.push({
+                index: $(this).data('index'),
+                value: $(this).val().toLowerCase()
+            });
+        });
+
+        // Apply filters to each row
+        $('#us-client-body tr').each(function () {
+            const cells = $(this).find('td');
+            const visible = filters.every(filter => {
+                if (!filter.value) return true;
+                return cells.eq(filter.index).text().toLowerCase().includes(filter.value);
+            });
+
+            $(this).toggle(visible);
+        });
+    });
+
 
     // =======================
     // SQ Sheet JS
@@ -1124,7 +372,7 @@ $(document).ready(function () {
     $(document).on('click', '.delete-sq-btn', function () {
         const id = $(this).data('id');
         $('#sqDeleteId').val(id);
-        $('#sqDeleteModal').modal('show');
+        $('#sqDeleteModal').removeClass('hidden').addClass('flex');
     });
 
     $('#confirmSqDeleteBtn').on('click', function () {
@@ -1135,7 +383,7 @@ $(document).ready(function () {
             type: 'DELETE',
             data: { _token: $('meta[name="csrf-token"]').attr('content') },
             success: function (response) {
-                $('#sqDeleteModal').modal('hide');
+                $('#sqDeleteModal').addClass('hidden').removeClass('flex');
                 $('button[data-id="' + id + '"]').closest('tr').remove();
                 loadSQClients();
             },
@@ -1150,7 +398,7 @@ $(document).ready(function () {
         editingId = tr.data('id');
 
         const rawDate = tr.data('date');
-        const amount = tr.find('td:eq(2)').text().replace('AED', '').trim();
+        const amount = tr.find('td:eq(2)').text().replace('AED', '').replace(/,/g, '').trim();
         const remarks = tr.find('td:eq(3)').text().trim();
 
         $('#sqDate').val(rawDate);
@@ -1160,25 +408,6 @@ $(document).ready(function () {
         $('button[type="submit"]').text('Update').data('editing', true);
         window.scrollTo({ top: 0, behavior: 'smooth' });
     });
-
-    // $(document).on('click', '.copy-sq-btn', function () {
-    //     const tr = $(this).closest('tr');
-    //     const rawDate = tr.find('td:eq(1)').text().trim();
-    //     const parsedDate = new Date(rawDate);
-
-    //     if (isNaN(parsedDate.getTime())) return alert('Invalid date');
-
-    //     const yyyy = parsedDate.getFullYear();
-    //     const mm = String(parsedDate.getMonth() + 1).padStart(2, '0');
-    //     const dd = String(parsedDate.getDate()).padStart(2, '0');
-
-    //     $('#sqDate').val(`${yyyy}-${mm}-${dd}`);
-    //     $('#sqAmount').val(tr.find('td:eq(2)').text().replace('AED', '').trim());
-    //     $('#sqRemarks').val(tr.find('td:eq(3)').text().trim());
-
-    //     $('#sqSubmitBtn').text('Submit').removeData('editing-id');
-    //     window.scrollTo({ top: 0, behavior: 'smooth' });
-    // });
 
     $('#sqClientForm').on('submit', function (e) {
         e.preventDefault();
@@ -1226,82 +455,65 @@ $(document).ready(function () {
         }
     });
 
-    // $(document).on('click', '.copy-sq-btn', function () {
-    //     const tr = $(this).closest('tr');
-    //     const rawDate = tr.find('td:eq(1)').text().trim();
-
-    //     const parsedDate = new Date(rawDate);
-    //     if (isNaN(parsedDate.getTime())) return alert('Invalid date format.');
-
-    //     const yyyy = parsedDate.getFullYear();
-    //     const mm = String(parsedDate.getMonth() + 1).padStart(2, '0');
-    //     const dd = String(parsedDate.getDate()).padStart(2, '0');
-    //     const formattedDate = `${yyyy}-${mm}-${dd}`;
-
-    //     const amount = tr.find('td:eq(2)').text().replace('AED', '').trim();
-    //     const remarks = tr.find('td:eq(3)').text().trim();
-
-    //     $('#sqDate').val(formattedDate);
-    //     $('#sqAmount').val(amount);
-    //     $('#sqRemarks').val(remarks);
-
-    //     $('button[type="submit"]').text('Submit').removeData('editing');
-    //     window.scrollTo({ top: 0, behavior: 'smooth' });
-    // });
-
     $('#sqDateFilterInput').on('click', function () {
-        const $input = $(this);
-        const $popup = $('#sqDatePopup');
-        const popupHeight = $popup.outerHeight();
-        const inputOffset = $input.offset();
-        const scrollTop = $(window).scrollTop();
-        const windowHeight = $(window).height();
+        const $popup = $('#sqDateFilterPopup');
+        const inputRect = this.getBoundingClientRect();
+        const spaceBelow = window.innerHeight - inputRect.bottom;
+        const spaceAbove = inputRect.top;
 
-        let topPosition = inputOffset.top + $input.outerHeight() + 5;
-        if ((topPosition - scrollTop + popupHeight) > windowHeight) {
-            topPosition = inputOffset.top - popupHeight - 5;
+        // Show popup and decide direction
+        $popup.removeClass('top-full bottom-full mt-1 mb-1');
+
+        if (spaceBelow < 260 && spaceAbove > 260) {
+            $popup.addClass('bottom-full mb-1'); // show above
+        } else {
+            $popup.addClass('top-full mt-1'); // show below
         }
 
-        let leftPosition = inputOffset.left;
-        const popupWidth = $popup.outerWidth();
-        const windowWidth = $(window).width();
-        if ((leftPosition + popupWidth) > windowWidth) {
-            leftPosition = windowWidth - popupWidth - 10;
-        }
-
-        $popup.css({
-            position: 'absolute',
-            top: `${topPosition}px`,
-            left: `${leftPosition}px`,
-            zIndex: 9999
-        }).appendTo('body').fadeIn();
+        $popup.removeClass('hidden');
     });
 
     $(document).on('click', function (e) {
-        if (!$(e.target).closest('#sqDateFilterInput, #sqDatePopup').length) {
-            $('#sqDatePopup').fadeOut();
+        if (!$(e.target).closest('#sqDateFilterPopup, #sqDateFilterInput').length) {
+            $('#sqDateFilterPopup').addClass('hidden');
         }
     });
 
-    $('#applySQDateFilter').on('click', function () {
-        const from = $('#sqFromDate').val();
-        const to = $('#sqToDate').val();
-        if (!from || !to) return alert('Please select both dates.');
+    $('#applySqDateFilterBtn').on('click', function () {
+        const from = $('#sqDateFilterFrom').val();
+        const to = $('#sqDateFilterTo').val();
 
-        const filtered = originalSQClients.filter(item => item.date >= from && item.date <= to);
-        renderSQClients(filtered);
+        if (!from || !to) {
+            alert("Please select both dates.");
+            return;
+        }
 
-        $('#sqFilteredExcelBtn').removeClass('d-none');
-        $('#sqDatePopup').fadeOut();
+        const fromDate = new Date(from);
+        const toDate = new Date(to);
+        toDate.setHours(23, 59, 59, 999); // Include full day
 
-        $('#sqDateFilterInput').val(`${from} to ${to}`);
+        $('#us-client-body tr').each(function () {
+            // Use raw data-date from the <tr>
+            const rowDateStr = $(this).data('date'); // e.g., "2025-03-04"
+            const rowDate = new Date(rowDateStr);
+            rowDate.setHours(12); // Normalize to avoid timezone issues
+
+            if (rowDate >= fromDate && rowDate <= toDate) {
+                $(this).show();
+            } else {
+                $(this).hide();
+            }
+        });
+
+        $('#sqDateFilterPopup').addClass('hidden');
     });
 
-    $('#clearSQDateFilter').on('click', function () {
-        renderSQClients(originalSQClients);
-        $('#sqFilteredExcelBtn').addClass('d-none');
+    $('#clearSqDateFilterBtn').on('click', function () {
+        $('#sqDateFilterFrom').val('');
+        $('#sqDateFilterTo').val('');
         $('#sqDateFilterInput').val('');
-        $('#sqDatePopup').fadeOut();
+
+        $('#sq-client-body tr').show();
     });
 
     $('#sqFilteredExcelBtn').on('click', function () {
@@ -1324,36 +536,150 @@ $(document).ready(function () {
         XLSX.writeFile(wb, "sq_client_filtered.xlsx");
     });
 
-    // Enable drag scroll on elements with .drag-scroll
-    $('.drag-scroll').each(function () {
-        const $container = $(this);
-        const $tbody = $container.find('tbody');
-        let isDown = false;
-        let startX;
-        let scrollLeft;
+    $(document).on('input', '.column-filter', function () {
+        const filters = [];
 
-        $tbody.on('mousedown', function (e) {
-            isDown = true;
-            $container.addClass('dragging');
-            startX = e.pageX - $container.offset().left;
-            scrollLeft = $container.scrollLeft();
-            e.preventDefault();
+        // Store each filter value along with its column index
+        $('.column-filter').each(function () {
+            filters.push({
+                index: $(this).data('index'),
+                value: $(this).val().toLowerCase()
+            });
         });
 
-        $(document).on('mouseup', function () {
-            isDown = false;
-            $container.removeClass('dragging');
-        });
+        // Apply filters to each row
+        $('#sq-client-body tr').each(function () {
+            const cells = $(this).find('td');
+            const visible = filters.every(filter => {
+                if (!filter.value) return true;
+                return cells.eq(filter.index).text().toLowerCase().includes(filter.value);
+            });
 
-        $(document).on('mousemove', function (e) {
-            if (!isDown) return;
-            const x = e.pageX - $container.offset().left;
-            const walk = (x - startX) * 1; // Adjust scroll speed multiplier here
-            $container.scrollLeft(scrollLeft - walk);
+            $(this).toggle(visible);
         });
     });
 
+    // Show modal
+    $('#openCreateCustomerModalBtn').on('click', function () {
+        $('#createCustomerSheetModal').removeClass('hidden').addClass('flex');
+    });
+
+    // Cancel modal
+    $('#cancelCustomerSheetModalBtn').on('click', function () {
+        $('#createCustomerSheetModal').addClass('hidden').removeClass('flex');
+    });
+
+    $(document)
+        .off('click.summaryNav')
+        .on('click.summaryNav', '#nav-summary', function (e) {
+            e.preventDefault();
+            // delegate to the Summary tab → it will run the loaders once
+            $('.sheet-tab[data-sheet="summary"]').trigger('click');
+        });
+
+    $(document)
+        .off('customerSheets:totalsUpdated.summaryTable')
+        .on('customerSheets:totalsUpdated.summaryTable', function () {
+            fetchCustomerSheetsRows()
+                .done(res => {
+                    const rows = Array.isArray(res?.rows) ? res.rows : [];
+                    if (rows.length > 0) renderCustomerSheetsTable(rows);
+                    else renderCustomerSheetsTable(collectCustomerSheetsRowsFromDOM());
+                })
+                .fail(() => renderCustomerSheetsTable(collectCustomerSheetsRowsFromDOM()));
+        });
+
+    $(document)
+        .off('click.summaryNavSticky')
+        .on('click.summaryNavSticky', '#nav-summary, .sheet-tab[data-sheet="summary"]', function () {
+            // after you switch and render summary UI:
+            setTimeout(ensureKpiStickyBackdrop, 0);
+        });
+
+    // also call once on page load in case Summary is the initial view
+    $(function () {
+        setTimeout(ensureKpiStickyBackdrop, 0);
+    });
+
+    // On Summary nav click (initial load)
+    $(document)
+        .off('click.summaryNavLoans')
+        .on('click.summaryNavLoans', '#nav-summary, .sheet-tab[data-sheet="summary"]', function () {
+            refreshLoanOutstandingHybrid();
+        });
+
+    // Whenever the loan ledger updates anywhere in the app
+    $(document)
+        .off('loanLedger:updated.summaryLoans')
+        .on('loanLedger:updated.summaryLoans', function () {
+            refreshLoanOutstandingHybrid();
+        });
+
+    // Toggle menu
+    $(document)
+        .off('click.custdd')
+        .on('click.custdd', '#custDropBtn', function (e) {
+            e.stopPropagation();
+            $('#custDropMenu').toggleClass('hidden');
+        });
+
+    // Close when clicking outside
+    $(document)
+        .off('click.custddclose')
+        .on('click.custddclose', function (e) {
+            if (!$(e.target).closest('#customerTabsContainer').length) {
+                $('#custDropMenu').addClass('hidden');
+            }
+        });
+
+    // When choosing an item, update label and close (the global .sheet-tab handler will switch sheets)
+    $(document)
+        .off('click.custdditem')
+        .on('click.custdditem', '#custDropMenu .sheet-tab', function () {
+            $('#custDropMenu').addClass('hidden');
+            $('#custDropBtn').contents().filter(function () { return this.nodeType === 3; }).remove();
+            // Set new label (keep the caret icon)
+            const label = $(this).text().trim();
+            $('#custDropBtn').prepend(label + ' ');
+        });
+
 });
+
+function getSqCached() {
+    // 1) DOM (if SQ sheet already rendered)
+    const el = document.getElementById('sq-total-amount');
+    if (el && el.textContent) {
+        const n = parseFloat(el.textContent.replace(/[^\d.-]/g, ''));
+        if (!isNaN(n)) return n;
+    }
+    // 2) window
+    if (typeof window.sqTotal === 'number') return window.sqTotal;
+    // 3) localStorage
+    try {
+        const raw = localStorage.getItem('sqTotal');
+        if (raw != null) {
+            const n = parseFloat(raw);
+            if (!isNaN(n)) return n;
+        }
+    } catch { }
+    return null; // not cached
+}
+
+function fetchSqTotal() {
+    return $.getJSON('/summary/sq/total')
+        .then(res => Number(res?.total) || 0)
+        .catch(() => 0);
+}
+
+function switchToSheet(sheetId) {
+    const $tab = $(`.sheet-tab[data-sheet="${sheetId}"]`);
+    if ($tab.length) { $tab[0].click(); return; }
+    // fallback show/hide if no tab exists yet
+    const $section = $(`#sheet-${sheetId}`);
+    $('.sheet-section').not($section).hide();
+    $section.removeClass('hidden').css('display', 'block');
+    try { localStorage.setItem('activeSheet', sheetId); } catch { }
+}
 
 // All number have comma 
 function applyNumberFormatting() {
@@ -1364,184 +690,6 @@ function applyNumberFormatting() {
             $(this).text('AED ' + num.toLocaleString(undefined, { minimumFractionDigits: 2 }));
         }
     });
-}
-
-// GTS Investment Sheet Functions
-
-function submitEdit(id, totalUnits) {
-    const date = $('#date').val();
-    const supplier = $('#supplier').val();
-    const buyer = $('#buyer').val();
-    const invoice = $('#invoice').val();
-    const transaction = $('#transaction').val();
-    const unitPrice = parseFloat($('#unitPrice').val()) || 0;
-    const description = $('#description').val();
-    const ctns = parseFloat($('#ctns').val()) || 0;
-    const unitsPerCtn = parseFloat($('#unitsPerCtn').val()) || 0;
-    const weight = parseFloat($('#weight').val()) || 0;
-    const vatPercentage = parseFloat($('#vatPercentage').val()) || 0;
-    const shippingRatePerKg = parseFloat($('#shippingRatePerKg').val()) || 0;
-    const remarks = $('#remarks').val();
-
-    const totalMaterial = unitPrice * totalUnits;
-    const shippingRate = ctns * weight * shippingRatePerKg;
-    const dgd = (135 / 15) * ctns;
-    const labour = ctns * 10;
-    const shippingCost = shippingRate + dgd + labour;
-    const vatAmount = (vatPercentage > 0 && totalUnits > 0 && unitPrice > 0) ? (unitPrice * totalUnits) * (vatPercentage / 100) : 0;
-    const totalMaterialWithVAT = totalMaterial + vatAmount;
-
-    $.ajax({
-        url: `/update-investment/${id}`,
-        type: 'PUT',
-        headers: {
-            'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
-        },
-        data: {
-            date,
-            supplier_name: supplier,
-            buyer,
-            invoice_number: invoice,
-            transaction_mode: transaction,
-            unit_price: unitPrice,
-            description,
-            no_of_ctns: ctns,
-            units_per_ctn: unitsPerCtn,
-            total_units: totalUnits,
-            vat_percentage: vatPercentage,
-            vat_amount: vatAmount,
-            total_material: totalMaterial,
-            total_material_including_vat: totalMaterialWithVAT,
-            weight,
-            shipping_rate_per_kg: shippingRatePerKg,
-            shipping_rate: shippingRate,
-            dgd,
-            labour,
-            shipping_cost: shippingCost,
-            remarks
-        },
-        success: function () {
-            updateSummaryCards();
-            $('[data-bs-toggle="tooltip"]').tooltip('dispose').tooltip();
-            $('#investmentForm')[0].reset();
-            $('#investmentForm').removeData('edit-id');
-            $('#submitBtn').show();
-            $('#saveChangesBtn').hide();
-            localStorage.setItem('scrollToBottomAfterReload', 'true');
-            location.reload();
-        },
-        error: function (err) {
-            alert('Error updating row in database.');
-            console.error(err);
-        }
-    });
-}
-
-function exportGTSExcel() {
-    const wb = XLSX.utils.book_new();
-    const wsData = [];
-
-    const headers = [];
-    $('#sheet-gts table thead tr:eq(0) th').each(function (index) {
-        if (index < 21) headers.push($(this).text().trim());
-    });
-    wsData.push(headers);
-
-    $('#sheet-gts table tbody tr').each(function () {
-        const cells = $(this).find('td');
-        const allColumns = [];
-
-        cells.each(function (i) {
-            if (i < 21) {
-                const text = $(this).text().trim();
-                let parts;
-
-                if (i === 6) {
-                    parts = text.match(/\d+\.\s[^\n]+/g);
-                } else if (i >= 7 && i <= 20) {
-                    parts = text.match(/\d+\.\s[^.\n]*\d{1,3}(?:,\d{3})*(?:\.\d{2})?/g);
-                } else {
-                    parts = text.match(/\d+\.\s[^\n]+/g);
-                }
-
-                allColumns.push(parts ? parts.map(p => p.trim()) : [text]);
-            }
-        });
-
-        const maxLines = Math.max(...allColumns.map(col => col.length));
-
-        for (let i = 0; i < maxLines; i++) {
-            const row = [];
-            allColumns.forEach((col) => {
-                row.push(col[i] || '');
-            });
-            wsData.push(row);
-        }
-    });
-
-    wsData.push([]);
-    wsData.push(['Total Material Excl. VAT', $('#totalMaterialAED').text()]);
-    wsData.push(['Total Material Incl. VAT', $('#totalMaterialInclVAT').text()]);
-    wsData.push(['Total VAT Amount', $('#totalVAT').text()]);
-    wsData.push(['Total Shipment', $('#totalShipmentAED').text()]);
-    wsData.push(['Grand Total', $('#grandTotalAED').text()]);
-
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-    const range = XLSX.utils.decode_range(ws['!ref']);
-    for (let R = range.s.r; R <= range.e.r; ++R) {
-        for (let C = range.s.c; C <= range.e.c; ++C) {
-            const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
-            if (!ws[cellRef]) continue;
-            if (!ws[cellRef].s) ws[cellRef].s = {};
-            ws[cellRef].s.alignment = { wrapText: true };
-        }
-    }
-
-    XLSX.utils.book_append_sheet(wb, ws, "Investment Sheet");
-    XLSX.writeFile(wb, 'investment_Sheet.xlsx');
-}
-
-function showEntryForm(step) {
-    const entry = multiEntryData[step - 1] || {};
-
-    const html = `
-        <div class="step-label mb-2"><strong>Entry ${step}</strong></div>
-        <div class="row g-3 entry-row" data-step="${step}">
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="unit_price" placeholder="Unit Price" value="${entry.unit_price || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="vat_percentage" placeholder="VAT %" value="${entry.vat_percentage || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="text" class="form-control" name="description" placeholder="Description" value="${entry.description || ''}">
-            </div>
-
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="no_of_ctns" placeholder="No of CTNS" value="${entry.no_of_ctns || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="units_per_ctn" placeholder="Units/CTN" value="${entry.units_per_ctn || ''}">
-            </div>
-
-            <div class="col-md-4 manual-units-wrapper" style="display: none;">
-                <label class="text-danger small mb-1"><b>⚠️ Total No of Units (required if CTNS or Units/CTN missing)</b></label>
-                <input type="number" step="any" class="form-control" name="manual_total_units" placeholder="Enter Total No of Units" value="${entry.manual_total_units || ''}">
-            </div>
-
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="weight" placeholder="Weight in KG" value="${entry.weight || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="shipping_rate" placeholder="Shipping Rate/KG" value="${entry.shipping_rate || ''}">
-            </div>
-            <div class="col-md-8">
-                <input type="text" class="form-control" name="remarks" placeholder="Remarks" value="${entry.remarks || ''}">
-            </div>
-        </div>
-    `;
-    $('#entry-form-fields').html(html);
 }
 
 function updateSummaryCards() {
@@ -1673,36 +821,6 @@ function parseRowDate(dateStr) {
 
 // US CLIENT PAYMENT Logic Initialization
 
-// Fetch and load US Client data
-function loadUSClients() {
-    $.get('/us-client/data', function (data) {
-        const tbody = $('#us-client-body');
-        tbody.empty();
-
-        data.clients.forEach((item, index) => {
-            const dateFormatted = item.date ? formatDate(item.date) : '';
-            const amountFormatted = !isNaN(parseFloat(item.amount)) ? `AED ${parseFloat(item.amount).toFixed(2)}` : 'AED 0.00';
-
-            const row = `
-                <tr data-id="${item.id}" data-date="${item.date}">
-                    <td>${index + 1}</td>
-                    <td>${dateFormatted}</td>
-                    <td>${amountFormatted}</td>
-                    <td>${item.remarks || ''}</td>
-                    <td>
-                        <button class="btn btn-sm btn-success edit-us-btn">Edit</button>
-                        <button class="btn btn-sm btn-danger delete-us-btn" data-id="${item.id}">Delete</button>
-                    </td>
-                </tr>`;
-            tbody.append(row);
-        });
-
-        // Update Total Amount
-        const total = !isNaN(parseFloat(data.totalAmount)) ? `AED ${parseFloat(data.totalAmount).toFixed(2)}` : 'AED 0.00';
-        $('#us-total-amount').text(total);
-    });
-}
-
 function formatDate(dateStr) {
     if (!dateStr) return '';
     const d = new Date(dateStr);
@@ -1713,6 +831,12 @@ function formatDate(dateStr) {
         month: 'long',
         day: 'numeric'
     });
+}
+
+function formatDateISO(dateStr) {
+    const d = new Date(dateStr);
+    if (isNaN(d)) return '';
+    return d.toISOString().split('T')[0]; // "2025-03-04"
 }
 
 function exportUSClientExcel() {
@@ -1740,13 +864,27 @@ function exportUSClientExcel() {
 }
 
 function loadUSClients() {
-    $.get('/us-client/data', function (data) {
-        originalUSClients = data.clients;
-        renderUSClients(data.clients);
+    $.get('us-client/data', function (data) {
+        const clients = (data && Array.isArray(data.clients)) ? data.clients : [];
+        originalUSClients = clients;
+        renderUSClients(clients);
+
+        const total = Number(data && data.totalAmount) || 0;
         $('#us-total-amount').text(
-            'AED ' + parseFloat(data.totalAmount).toLocaleString(undefined, { minimumFractionDigits: 2 })
+            'AED ' + total.toLocaleString(undefined, { minimumFractionDigits: 2 })
         );
-    });
+
+        // cache for Summary/Beneficiary (optional)
+        window.usTotal = total;
+        try { localStorage.setItem('usTotal', String(total)); } catch { }
+    })
+        .fail(function (xhr) {
+            console.error('US clients fetch failed:', xhr?.status, xhr?.responseText);
+            $('#us-total-amount').text('AED 0.00');
+        })
+        .always(function () {
+            $(document).trigger('us:totalsUpdated');
+        });
 }
 
 function renderUSClients(clients) {
@@ -1758,22 +896,25 @@ function renderUSClients(clients) {
         const srNo = originalIndex !== -1 ? originalIndex + 1 : '-';
 
         const row = `
-            <tr data-id="${item.id}" data-date="${item.date}">
-                <td>${srNo}</td>
-                <td>${formatDate(item.date)}</td>
-                <td class="format-aed">AED ${parseFloat(item.amount).toFixed(2)}</td>
-                <td>${item.remarks || ''}</td>
-                <td>
-                    <button class="btn btn-sm btn-success edit-us-btn" data-bs-toggle="tooltip" title="Edit"><i class="bi bi-pencil-square"></i></button>
-                    <button class="btn btn-sm btn-danger delete-us-btn" data-bs-toggle="tooltip" data-id="${item.id}" title="Delete"><i class="bi bi-trash"></i></button>
+            <tr data-id="${item.id}" data-date="${formatDateISO(item.date)}">
+                <td class="w-5">${srNo}</td>
+                <td class="w-35">${formatDate(item.date)}</td>
+                <td class="format-aed w-32">AED ${parseFloat(item.amount).toFixed(2)}</td>
+                <td class="w-40">${item.remarks || ''}</td>
+                <td class="w-24">
+                    <button class="edit-us-btn px-2 py-1 text-sm rounded bg-green-600 hover:bg-green-700 text-white" title="Edit">
+                        <i class="bi bi-pencil-square"></i>
+                    </button>
+
+                    <button class="delete-us-btn px-2 py-1 text-sm rounded bg-red-600 hover:bg-red-700 text-white" data-id="${item.id}" title="Delete">
+                        <i class="bi bi-trash"></i>
+                    </button>
                 </td>
             </tr>`;
         tbody.append(row);
     });
 
     applyNumberFormatting();
-
-    $('[data-bs-toggle="tooltip"]').tooltip();
 }
 
 // SQ Sheet Logic Initialization
@@ -1784,6 +925,12 @@ function loadSQClients() {
         $('#sq-total-amount').text(
             'AED ' + parseFloat(data.totalAmount).toLocaleString(undefined, { minimumFractionDigits: 2 })
         );
+        // cache it so Summary can use immediately on next visit/refresh
+        try {
+            window.sqTotal = Number(data.totalAmount) || 0;
+            localStorage.setItem('sqTotal', String(window.sqTotal));
+        } catch { }
+        $(document).trigger('sq:totalsUpdated');
     });
 }
 
@@ -1796,22 +943,25 @@ function renderSQClients(clients) {
         const srNo = originalIndex !== -1 ? originalIndex + 1 : '-';
 
         const row = `
-            <tr data-id="${item.id}" data-date="${item.date}">
-                <td>${srNo}</td>
-                <td>${formatDate(item.date)}</td>
-                <td class="format-aed">AED ${parseFloat(item.amount).toFixed(2)}</td>
-                <td>${item.remarks || ''}</td>
-                <td>
-                    <button class="btn btn-sm btn-success edit-sq-btn" data-bs-toggle="tooltip" title="Edit"><i class="bi bi-pencil-square"></i></button>
-                    <button class="btn btn-sm btn-danger delete-sq-btn" data-bs-toggle="tooltip" data-id="${item.id}" title="Delete"><i class="bi bi-trash"></i></button>
+            <tr data-id="${item.id}" data-date="${formatDateISO(item.date)}">
+                <td class="w-5">${srNo}</td>
+                <td class="w-35">${formatDate(item.date)}</td>
+                <td class="format-aed w-32">AED ${parseFloat(item.amount).toFixed(2)}</td>
+                <td class="w-40">${item.remarks || ''}</td>
+                <td class="w-24">
+                    <button class="edit-sq-btn px-2 py-1 text-sm rounded bg-green-600 hover:bg-green-700 text-white" title="Edit">
+                        <i class="bi bi-pencil-square"></i>
+                    </button>
+
+                    <button class="delete-sq-btn px-2 py-1 text-sm rounded bg-red-600 hover:bg-red-700 text-white" data-id="${item.id}" title="Delete">
+                        <i class="bi bi-trash"></i>
+                    </button>
                 </td>
             </tr>`;
         tbody.append(row);
     });
 
     applyNumberFormatting();
-
-    $('[data-bs-toggle="tooltip"]').tooltip();
 }
 
 function exportSQExcel() {
@@ -1838,3710 +988,1113 @@ function exportSQExcel() {
     XLSX.writeFile(wb, 'sq_sheet.xlsx');
 }
 
-// RH Sheet Logic Initialization
-let rhMultiEntryData = [];
-let rhCurrentStep = 1;
 
-let editingRHGroup = null;
 
-function initRHLogic() {
-    $.ajaxSetup({
-        headers: {
-            'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
-        }
-    });
-    $('#rhSubmitBtn').on('click', function (e) {
-        e.preventDefault();
-        const noOfCtns = parseFloat($('#rhNoOfCtns').val());
-        const unitsPerCtn = parseFloat($('#rhUnitsPerCtn').val());
 
-        if ((!noOfCtns || noOfCtns === 0) && (!unitsPerCtn || unitsPerCtn === 0)) {
-            $('#rhManualTotalUnitsInput').val('');
-            $('#rhManualUnitsModal').data('source', 'submit');
-            $('#rhManualUnitsModal').modal('show');
-            return;
-        }
 
-        sendRHEntry();
-    });
+// Local Sales: cache items per header row so we only fetch once
+window.localItemsCache = window.localItemsCache || {};
 
-    $('#rhConfirmManualUnitsBtn').on('click', function () {
-        const manualUnits = parseFloat($('#rhManualTotalUnitsInput').val());
-        if (!manualUnits || manualUnits <= 0) {
-            alert('Please enter a valid total number of units.');
-            return;
-        }
+// ---------- Local Sales: render master+detail ----------
+function renderLocalRows(rows) {
+    const $body = $('#localSalesBody').empty();
 
-        $('#rhTotalUnitsHidden').val(manualUnits);
-        $('#rhManualTotalUnitsInput').val('');
-        $('#rhManualUnitsModal').modal('hide');
-
-        const mode = $('#rhManualUnitsModal').data('source');
-        if (mode === 'edit') {
-            sendRHEntryEdit();
-        } else {
-            sendRHEntry();
-        }
-    });
-
-    // Open Multiple Entry Modal
-    $('#openRHMultiEntryModalBtn').on('click', function () {
-        rhMultiEntryData = [];
-        rhCurrentStep = 1;
-        $('#rh-multi-step-wrapper').show();
-        $('#rh-entry-fields-container').hide();
-        $('#rh-number-of-entries').val('');
-        $('#rhMultiEntryModal').modal('show');
-    });
-
-    $('#rh-start-entry-btn').on('click', function () {
-        const count = parseInt($('#rh-number-of-entries').val());
-        if (!count || count < 1) {
-            alert("Enter valid number");
-            return;
-        }
-        rhMultiEntryData = new Array(count).fill({});
-        rhCurrentStep = 1;
-        showRHEntryForm(rhCurrentStep);
-        $('#rh-multi-step-wrapper').hide();
-        $('#rh-entry-fields-container').show();
-    });
-
-    $('#rh-next-entry-btn').on('click', function () {
-        const $row = $('.entry-row[data-step="' + rhCurrentStep + '"]');
-        const noOfCtns = parseFloat($row.find('[name="no_of_ctns"]').val()) || 0;
-        const unitsPerCtn = parseFloat($row.find('[name="units_per_ctn"]').val()) || 0;
-
-        // If either CTNS or Units/CTN is missing
-        if (!noOfCtns || !unitsPerCtn) {
-            // Check if input already added
-            if ($row.find('[name="manual_total_units"]').length === 0) {
-                $row.append(`
-                <div class="col-md-6">
-                    <input type="number" step="any" class="form-control border-danger mt-2" name="manual_total_units" placeholder="⚠️ Total No of Units (required if CTNS or Units/CTN missing)">
-                </div>
-            `);
-                return; // Stop here until user enters manual value
-            }
-
-            const manualUnits = parseFloat($row.find('[name="manual_total_units"]').val()) || 0;
-            if (!manualUnits || manualUnits <= 0) {
-                alert("Please enter Total No of Units.");
-                return;
-            }
-        }
-
-        storeRHEntryData(rhCurrentStep);
-        if (rhCurrentStep < rhMultiEntryData.length) {
-            rhCurrentStep++;
-            showRHEntryForm(rhCurrentStep);
-        } else {
-            $('#rh-next-entry-btn').hide();
-            $('#rh-submit-multi-entry').removeClass('d-none');
-        }
-    });
-
-    $('#rh-prev-entry-btn').on('click', function () {
-        storeRHEntryData(rhCurrentStep);
-        if (rhCurrentStep > 1) {
-            rhCurrentStep--;
-            showRHEntryForm(rhCurrentStep);
-        }
-    });
-
-    $('#rh-multi-entry-form').on('submit', function (e) {
-        e.preventDefault();
-        storeRHEntryData(rhCurrentStep);
-
-        const supplier = $('#rhClientForm').find('[name="supplier_name"]').val().trim();
-        const date = $('#rhDate').val();
-
-        if (!supplier || !date) {
-            alert("Supplier name and date are required.");
-            return;
-        }
-
-        $.ajax({
-            url: '/rh-client/save-multiple',
-            method: 'POST',
-            headers: {
-                'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
-            },
-            data: {
-                date: date,
-                supplier_name: supplier,
-                entries: rhMultiEntryData,
-                multiple_entry: true
-            },
-            success: function () {
-                $('#rhMultiEntryModal').modal('hide');
-                alert('Multiple entries saved!');
-                loadRHClients();
-                $('html, body').animate({
-                    scrollTop: $('#rh-client-body').closest('table').offset().top - 100
-                }, 500);
-            },
-            error: function (xhr) {
-                console.error(xhr.responseText);
-                alert("Error saving multiple entries.");
-            }
-        });
-    });
-
-    function showRHEntryForm(step) {
-        const entry = rhMultiEntryData[step - 1] || {};
-        const html = `
-        <div class="step-label mb-2"><strong>Entry ${step}</strong></div>
-        <div class="row g-3 entry-row" data-step="${step}">
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="unit_price" placeholder="Unit Price" value="${entry.unit_price || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="text" class="form-control" name="description" placeholder="Description" value="${entry.description || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="no_of_ctns" placeholder="No of CTNS" value="${entry.no_of_ctns || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="units_per_ctn" placeholder="Units/CTN" value="${entry.units_per_ctn || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="weight" placeholder="Weight in KG" value="${entry.weight || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="shipping_rate_per_kg" placeholder="Shipping Rate/KG" value="${entry.shipping_rate_per_kg || ''}">
-            </div>
-        </div>
-    `;
-        $('#rh-entry-form-fields').html(html);
-    }
-
-    function storeRHEntryData(step) {
-        const $row = $('.entry-row[data-step="' + step + '"]');
-
-        rhMultiEntryData[step - 1] = {
-            unit_price: parseFloat($row.find('[name="unit_price"]').val()) || 0,
-            description: $row.find('[name="description"]').val() || '',
-            no_of_ctns: parseFloat($row.find('[name="no_of_ctns"]').val()) || 0,
-            units_per_ctn: parseFloat($row.find('[name="units_per_ctn"]').val()) || 0,
-            weight: parseFloat($row.find('[name="weight"]').val()) || 0,
-            shipping_rate_per_kg: parseFloat($row.find('[name="shipping_rate_per_kg"]').val()) || 0,
-            manual_total_units: parseFloat($row.find('[name="manual_total_units"]').val()) || 0
-        };
-    }
-
-    $(document).on('click', '.edit-rh-btn', function () {
-        const $row = $(this).parents('tr[data-id]');
-        const id = $row.data('id');
-        const subSerials = $row.data('subserials');
-
-        if (Array.isArray(subSerials) && subSerials.length > 1) {
-            editingRHGroup = {
-                date: $row.data('date'),
-                supplier: $row.data('supplier'),
-                subSerials: subSerials
-            };
-            editingRHId = id;
-
-            $('#rhEditSubSerialInput').val('');
-            $('#rhEditSubEntryModal').modal('show');
-        } else {
-            editingRHId = id;
-            $('#rhDate').val($row.data('date'));
-            $('#supplierName').val($row.data('supplier'));
-            $('#rhDescription').val($row.find('td:eq(3)').text().trim());
-            $('#rhNoOfCtns').val($row.find('td:eq(4)').text().trim());
-            $('#rhUnitsPerCtn').val($row.find('td:eq(5)').text().trim());
-            $('#rhUnitPrice').val($row.find('td:eq(6)').text().replace('AED', '').trim());
-            $('#rhWeight').val($row.find('td:eq(8)').text().trim());
-            $('#rhShippingRate').val($row.data('shipping-rate-per-kg'));
-
-            $('#rhSubmitBtn').addClass('d-none');
-            $('#rhSaveChangesBtn').removeClass('d-none');
-            $('html, body').animate({ scrollTop: 0 }, 300);
-        }
-    });
-
-    $('#confirmRHSubSerialEditBtn').on('click', function () {
-        const subSerial = parseInt($('#rhEditSubSerialInput').val().trim());
-
-        if (!subSerial || !editingRHGroup) {
-            alert("Please enter a valid sub-serial number.");
-            return;
-        }
-
-        $.getJSON('/rh-client/data-all', function (fullData) {
-            const row = fullData.find(entry =>
-                entry.date.trim() === editingRHGroup.date.trim() &&
-                entry.supplier_name.trim().toLowerCase() === editingRHGroup.supplier.trim().toLowerCase() &&
-                parseInt(entry.sub_serial) === parseInt(subSerial)
-            );
-
-            if (!row) {
-                alert("Could not load data.");
-                return;
-            }
-
-            editingRHId = row.id;
-            editingRHSubSerial = subSerial;
-
-            // Populate fields
-            $('html, body').animate({ scrollTop: 0 }, 300);
-            $('#rhDate').val(row.date);
-            $('#supplierName').val(row.supplier_name);
-            $('#rhDescription').val(row.description || '');
-            $('#rhNoOfCtns').val(row.no_of_ctns || '');
-            $('#rhUnitsPerCtn').val(row.units_per_ctn || '');
-            $('#rhUnitPrice').val(row.unit_price || '');
-            $('#rhWeight').val(row.weight || '');
-            $('#rhShippingRate').val(row.shipping_rate_per_kg || '');
-
-            editingRHId = row.id;
-            editingRHSubSerial = subSerial;
-
-            $('#rhSubmitBtn').addClass('d-none');
-            $('#rhSaveChangesBtn').removeClass('d-none');
-
-            $('#rhEditSubEntryModal').modal('hide');
-            $('#rhEditSubSerialInput').val('');
-        });
-    });
-
-    $('#rhSaveChangesBtn').on('click', function () {
-        if (!editingRHId) return alert("Missing record ID.");
-
-        const data = {
-            date: $('#rhDate').val(),
-            supplier_name: $('#supplierName').val(),
-            description: $('#rhDescription').val(),
-            no_of_ctns: $('#rhNoOfCtns').val(),
-            units_per_ctn: $('#rhUnitsPerCtn').val(),
-            unit_price: $('#rhUnitPrice').val(),
-            weight: $('#rhWeight').val(),
-            shipping_rate_per_kg: $('#rhShippingRate').val(),
-            _token: $('meta[name="csrf-token"]').attr('content')
-        };
-
-        const url = editingRHSubSerial
-            ? `/rh-client/update-subentry/${editingRHId}/${editingRHSubSerial}`
-            : `/rh-client/update/${editingRHId}`;
-
-        $.ajax({
-            url: url,
-            type: 'PUT',
-            data: data,
-            success: function () {
-                alert('Updated successfully!');
-                editingRHId = null;
-                editingRHSubSerial = null;
-                $('#rhClientForm')[0].reset();
-                $('#rhSubmitBtn').removeClass('d-none');
-                $('#rhSaveChangesBtn').addClass('d-none');
-                loadRHClients();
-            },
-            error: function () {
-                alert('Update failed.');
-            }
-        });
-    });
-
-    $('#confirmRHSubSerialEditBtn').on('click', function () {
-        const subSerial = parseInt($('#rhEditSubSerialInput').val().trim());
-
-        if (!subSerial || !editingRHGroup) {
-            alert("Please enter a valid sub-serial number.");
-            return;
-        }
-
-        $.ajax({
-            url: '/rh-client/data', // You already have this route returning all data
-            method: 'GET',
-            success: function (data) {
-                const match = data.find(item =>
-                    item.date === editingRHGroup.date &&
-                    item.supplier_name === editingRHGroup.supplier &&
-                    item.sub_serials?.length > 1 &&
-                    item.sub_serials.includes(subSerial)
-                );
-
-                if (!match) {
-                    alert("Sub-serial not found.");
-                    return;
-                }
-
-                // Find exact record from backend
-                $.getJSON('/rh-client/data-all', function (fullData) {
-                    const row = fullData.find(entry =>
-                        entry.date === editingRHGroup.date &&
-                        entry.supplier_name === editingRHGroup.supplier &&
-                        parseInt(entry.sub_serial) === subSerial
-                    );
-
-                    if (!row) {
-                        alert("Could not load data.");
-                        return;
-                    }
-
-                    $('html, body').animate({ scrollTop: 0 }, 300);
-                    $('#rhDate').val(row.date);
-                    $('#supplierName').val(row.supplier_name);
-                    $('#description').val(row.description || '');
-                    $('#noOfCtns').val(row.no_of_ctns || '');
-                    $('#unitsPerCtn').val(row.units_per_ctn || '');
-                    $('#unitPrice').val(row.unit_price || '');
-                    $('#weightInKg').val(row.weight || '');
-                    $('#shippingRatePerKg').val(row.shipping_rate_per_kg || '');
-
-                    editingRHId = row.id;
-                    $('#rhClientForm').data('edit-id', editingRHId);
-
-                    $('#rhSubmitBtn').addClass('d-none');
-                    $('#rhSaveChangesBtn').removeClass('d-none');
-
-                    $('#rhEditSubEntryModal').modal('hide');
-                    $('#rhEditSubSerialInput').val('');
-                });
-
-            }
-        });
-    });
-
-    $(document).on('click', '.delete-rh-btn', function () {
-        const $row = $(this).closest('tr');
-        const subSerials = JSON.parse($row.attr('data-subserials') || '[]');
-
-        const isMultiple = subSerials.length > 1;
-        const id = $row.data('id');
-        const date = $row.data('date');
-        const supplier = $row.data('supplier');
-
-        $('#rhDeleteRowId').val(id);
-        $('#rhDeleteDate').val(date);
-        $('#rhDeleteSupplier').val(supplier);
-
-        if (isMultiple) {
-            $('#rhDeleteMessage').html(`
-            This is a multiple entry.<br>
-            <b>Date:</b> ${date}<br>
-            <b>Supplier:</b> ${supplier}<br>
-            Enter sub-serial number (e.g., <strong>1</strong>) or type <strong>all</strong>.
-        `);
-            $('#rhSubSerialInputWrapper').show();
-            setTimeout(() => {
-                $('#rhDeleteSubSerialInput').focus();
-            }, 100);
-        } else {
-            $('#rhDeleteMessage').text('Are you sure you want to delete this RH entry?');
-            $('#rhSubSerialInputWrapper').hide();
-        }
-
-        $('#rhDeleteModal').modal('show');
-    });
-
-    $('#confirmRHDeleteBtn').on('click', function () {
-        const isMultiple = $('#rhSubSerialInputWrapper').is(':visible');
-        const subSerial = $('#rhDeleteSubSerialInput').val().trim().toLowerCase();
-        const id = $('#rhDeleteRowId').val();
-        const date = $('#rhDeleteDate').val();
-        const supplier = $('#rhDeleteSupplier').val();
-
-        let url = '';
-        let method = '';
-        let data = {};
-
-        if (isMultiple) {
-            if (!subSerial) {
-                alert("Please enter sub-serial number or 'all'");
-                return;
-            }
-
-            // POST method for delete-multiple
-            url = '/rh-client/delete-multiple';
-            method = 'POST';
-            data = {
-                date: date,
-                supplier_name: supplier,
-                sub_serial: subSerial,
-                _token: $('meta[name="csrf-token"]').attr('content')
-            };
-        } else {
-            // Laravel DELETE method with CSRF
-            url = `/rh-client/delete/${id}`;
-            method = 'POST';
-            data = {
-                _method: 'DELETE', // Use _method override
-                _token: $('meta[name="csrf-token"]').attr('content')
-            };
-        }
-
-        $.ajax({
-            url: url,
-            type: method,
-            data: data,
-            success: function () {
-                $('#rhDeleteModal').modal('hide');
-                $('#rhDeleteSubSerialInput').val('');
-                loadRHClients();
-                alert("Deleted successfully.");
-            },
-            error: function (xhr) {
-                console.error(xhr.responseText);
-                alert("Failed to delete entry.");
-            }
-        });
-    });
-
-    $('#rhDeleteModal').on('shown.bs.modal', function () {
-        setTimeout(() => {
-            $('#rhDeleteSubSerialInput').focus();
-        }, 100);
-    });
-
-    $('#rhFilteredExcelBtn').on('click', function () {
-        const fromDate = $('#rhFromDate').val();
-        const toDate = $('#rhToDate').val();
-
-        if (!fromDate || !toDate) {
-            alert('Please select both dates.');
-            return;
-        }
-
-        const wb = XLSX.utils.book_new();
-        const headers = [];
-
-        $('#rh-export-table thead tr:eq(0) th').each(function (i) {
-            if (i !== 19) headers.push($(this).text().trim()); // Exclude Action column
-        });
-
-        const wsData = [headers];
-
-        $('#rh-client-body tr:visible').each(function () {
-            const rawDateStr = $(this).find('td:eq(1)').text().trim();
-            const formattedRowDate = convertToISO(rawDateStr);
-
-            if (!formattedRowDate) return;
-
-            if (formattedRowDate >= fromDate && formattedRowDate <= toDate) {
-                const rowData = [];
-                $(this).find('td').each(function (i) {
-                    if (i !== 19) {
-                        rowData.push($(this).text().trim().replace(/<br\s*\/?>/gi, '\n'));
-                    }
-                });
-                wsData.push(rowData);
-            }
-        });
-
-        if (wsData.length === 1) {
-            alert("No data in selected date range.");
-            return;
-        }
-
-        const ws = XLSX.utils.aoa_to_sheet(wsData);
-        XLSX.utils.book_append_sheet(wb, ws, "RH Sheet");
-        XLSX.writeFile(wb, 'rh_sheet_filtered.xlsx');
-    });
-
-    $('#applyRHDateFilter').on('click', function () {
-        const fromDate = $('#rhFromDate').val();
-        const toDate = $('#rhToDate').val();
-
-        if (!fromDate || !toDate) {
-            alert('Please select both From and To dates.');
-            return;
-        }
-
-        $('#rh-client-body tr').each(function () {
-            const rawDateStr = $(this).find('td:eq(1)').text().trim(); // Example: "Wednesday, 15 May 2025"
-            const formattedRowDate = convertToISO(rawDateStr); // Will be: "2025-05-15"
-
-            if (!formattedRowDate) {
-                $(this).hide();
-                return;
-            }
-
-            if (formattedRowDate >= fromDate && formattedRowDate <= toDate) {
-                $(this).show();
-            } else {
-                $(this).hide();
-            }
-        });
-
-        $('#rhFilteredExcelBtn').removeClass('d-none');
-        $('#rhDatePopupBox').fadeOut();
-        $('#rhDateFilterInput').val(`${fromDate} to ${toDate}`);
-    });
-
-    $('#clearRHDateFilter').on('click', function () {
-        $('#rh-client-body tr').show(); // Show all rows again
-        $('#rhFilteredExcelBtn').addClass('d-none');
-        $('#rhDateFilterInput').val('');
-        $('#rhDatePopupBox').fadeOut();
-    });
-
-    $('#rhDateFilterInput').on('click', function () {
-        const $input = $(this);
-        const $popup = $('#rhDatePopupBox'); // changed ID from #rhDatePopup
-        const popupHeight = $popup.outerHeight();
-        const popupWidth = $popup.outerWidth();
-        const inputOffset = $input.offset();
-        const windowHeight = $(window).height();
-        const windowWidth = $(window).width();
-
-        let topPosition = inputOffset.top + $input.outerHeight() + 5;
-        if ((topPosition + popupHeight) > $(window).scrollTop() + windowHeight) {
-            topPosition = inputOffset.top - popupHeight - 5;
-        }
-
-        let leftPosition = inputOffset.left;
-        if ((leftPosition + popupWidth) > windowWidth) {
-            leftPosition = windowWidth - popupWidth - 10;
-        }
-
-        $popup.css({
-            position: 'absolute',
-            top: `${topPosition}px`,
-            left: `${leftPosition}px`,
-            zIndex: 9999
-        }).appendTo('body').fadeIn();
-    });
-
-    $(document).on('click', function (e) {
-        if (!$(e.target).closest('#rhDateFilterInput, #rhDatePopupBox').length) {
-            $('#rhDatePopupBox').fadeOut();
-        }
-    });
-
-    $(document).on('click', '.copy-rh-btn', function () {
-        const $row = $(this).closest('tr[data-id]');
-        const subSerials = $row.data('subserials');
-
-        const isMultiple = Array.isArray(subSerials) && subSerials.length > 1;
-
-        if (isMultiple) {
-            window.copyRHGroup = {
-                sr_no: $row.data('sr-no'),
-                subSerials: subSerials,
-                date: $row.data('date'),
-                supplier: $row.data('supplier')
-            };
-            $('#rhCopySubSerialInput').val('');
-            $('#rhCopySubEntryModal').modal('show');
-        } else {
-            $('#rhDate').val($row.data('date'));
-            $('#supplierName').val($row.data('supplier'));
-            $('#rhDescription').val($row.attr('data-description') || '');
-            $('#rhNoOfCtns').val($row.attr('data-no-of-ctns') || '');
-            $('#rhUnitsPerCtn').val($row.attr('data-units-per-ctn') || '');
-            $('#rhUnitPrice').val($row.attr('data-unit-price') || '');
-            $('#rhWeight').val($row.attr('data-weight') || '');
-            $('#rhShippingRate').val($row.attr('data-shipping-rate-per-kg') || '');
-
-            $('#rhSubmitBtn').removeClass('d-none');
-            $('#rhSaveChangesBtn').addClass('d-none');
-            $('html, body').animate({ scrollTop: 0 }, 300);
-        }
-    });
-
-    $('#confirmRHSubSerialCopyBtn').on('click', function () {
-        const subSerial = parseInt($('#rhCopySubSerialInput').val().trim());
-
-        if (!subSerial || !window.copyRHGroup) {
-            alert("Please enter a valid sub-serial number.");
-            return;
-        }
-
-        $.getJSON('/rh-client/data-all', function (fullData) {
-            const matchedRow = fullData.find(entry =>
-                entry.sr_no &&
-                entry.sub_serial &&
-                parseInt(entry.sr_no) === parseInt(copyRHGroup.sr_no) &&
-                parseInt(entry.sub_serial) === subSerial
-            );
-
-            if (!matchedRow) {
-                alert("Sub-serial not found.");
-                return;
-            }
-
-            $('html, body').animate({ scrollTop: 0 }, 300);
-            $('#rhDate').val(matchedRow.date);
-            $('#supplierName').val(matchedRow.supplier_name);
-            $('#rhDescription').val(matchedRow.description || '');
-            $('#rhNoOfCtns').val(matchedRow.no_of_ctns || '');
-            $('#rhUnitsPerCtn').val(matchedRow.units_per_ctn || '');
-            $('#rhUnitPrice').val(matchedRow.unit_price || '');
-            $('#rhWeight').val(matchedRow.weight || '');
-            $('#rhShippingRate').val(matchedRow.shipping_rate_per_kg || '');
-
-            $('#rhSubmitBtn').removeClass('d-none');
-            $('#rhSaveChangesBtn').addClass('d-none');
-
-            $('#rhCopySubEntryModal').modal('hide');
-            $('#rhCopySubSerialInput').val('');
-        });
-    });
-
-    $(function () {
-        $('[data-bs-toggle="tooltip"]').tooltip();
-    });
-
-    // Handle form submission
-    $('#rhLoanForm').on('submit', function (e) {
-        e.preventDefault();
-
-        const date = $('#rhLoanDate').val();
-        const description = $('#rhLoanDescription').val();
-        const amount = parseFloat($('#rhLoanAmount').val());
-
-        if (!date || !description || isNaN(amount) || amount <= 0) {
-            alert('Please fill in all fields correctly.');
-            return;
-        }
-
-        const payload = {
-            _token: $('meta[name="csrf-token"]').attr('content'),
-            date,
-            description,
-            amount
-        };
-
-        if (editingLoanId) {
-            // Update existing
-            $.ajax({
-                url: `/rh-loan/update/${editingLoanId}`,
-                type: 'PUT',
-                data: payload,
-                success: function () {
-                    resetLoanForm();
-                    reloadLoanData();
-                },
-                error: function () {
-                    alert('An error occurred while updating.');
-                }
-            });
-        } else {
-            // Create new
-            $.ajax({
-                url: '/rh-loan/save',
-                type: 'POST',
-                data: payload,
-                success: function () {
-                    resetLoanForm();
-                    reloadLoanData();
-                },
-                error: function () {
-                    alert('An error occurred while saving.');
-                }
-            });
-        }
-    });
-
-    $.get('/rh-loan/entries', function (data) {
-        rhLoanEntries = data;
-        renderRhLoanTable();
-    });
-
-    $(document).on('click', '.rh-delete-loan-btn', function () {
-        const id = $(this).data('id');
-        $('#deleteLoanId').val(id);
-        $('#deleteLoanModal').modal('show');
-    });
-
-    $('#confirmDeleteLoanBtn').on('click', function () {
-        const id = $('#deleteLoanId').val();
-
-        $.ajax({
-            url: `/rh-loan/delete/${id}`,
-            type: 'DELETE',
-            data: {
-                _token: $('meta[name="csrf-token"]').attr('content')
-            },
-            success: function () {
-                $('#deleteLoanModal').modal('hide');
-
-                // Reload data after delete
-                $.get('/rh-loan/entries', function (data) {
-                    rhLoanEntries = data;
-                    renderRhLoanTable();
-                });
-            }
-        });
-    });
-
-    $(document).on('click', '.rh-edit-loan-btn', function () {
-        const $row = $(this).closest('tr');
-        editingLoanId = $(this).data('id');
-
-        // Fill the form
-        $('#rhLoanDate').val($row.find('td:eq(1)').data('date'));
-        $('#rhLoanDescription').val($row.find('td:eq(2)').text().trim());
-        const amountText = $row.find('td:eq(3)').text().replace(/[^\d.-]/g, '');
-        $('#rhLoanAmount').val(parseFloat(amountText));
-
-        // Change button text
-        $('#rhLoanSubmitBtn').text('Save Changes').removeClass('btn-success').addClass('btn-success');
-    });
-
-}
-
-function loadRHClients() {
-    $.ajax({
-        url: '/rh-client/data',
-        type: 'GET',
-        success: function (data) {
-            if (!Array.isArray(data)) {
-                console.error('Invalid data format:', data);
-                alert('Invalid response from server.');
-                return;
-            }
-
-            data.sort((a, b) => a.sr_no - b.sr_no);
-
-            $('#rh-client-body').empty();
-            let totalMaterialSum = 0;
-            let totalShipmentSum = 0;
-            let grandTotalSum = 0;
-
-            data.forEach((item, index) => {
-                totalMaterialSum += item.total_material_sum || 0;
-                totalShipmentSum += item.shipping_cost_sum || 0;
-                grandTotalSum = totalMaterialSum + totalShipmentSum;
-
-                const isMultipleEntry = item.sub_serials && item.sub_serials.length > 1;
-
-                const formatWithSubSerial = (combinedValue) => {
-                    if (!combinedValue) return '';
-                    const values = combinedValue.split('<br>');
-                    return values.join('<br>');
-                };
-
-                const $row = $('<tr></tr>').attr({
-                    'data-id': item.id,
-                    'data-date': item.date,
-                    'data-supplier': item.supplier_name,
-                    'data-sr-no': item.sr_no,
-                    'data-subserials': JSON.stringify(item.sub_serials || []),
-                });
-
-                if (isMultipleEntry) {
-                    $row.addClass('multi-entry-row');
-                } else {
-                    $row.attr({
-                        'data-description': item.description?.toString() || '',
-                        'data-no-of-ctns': item.no_of_ctns?.toString() || '',
-                        'data-units-per-ctn': item.units_per_ctn?.toString() || '',
-                        'data-unit-price': item.unit_price?.toString() || '',
-                        'data-weight': item.weight?.toString() || '',
-                        'data-shipping-rate-per-kg': item.shipping_rate_per_kg?.toString() || ''
-                    });
-                }
-
-                $row.append(`<td data-bs-toggle="tooltip" title="SR.NO">${index + 1}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Date">${formatRHDate(item.date)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Supplier Name">${item.supplier_name || ''}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Description">${formatWithSubSerial(item.description_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="No. of CTNS" class="format-aed">${formatWithSubSerial(item.no_of_ctns_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Units/CTN" class="format-aed">${formatWithSubSerial(item.units_per_ctn_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Unit Price" class="format-aed">${formatWithSubSerial(item.unit_price_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Total No. of Units" class="format-aed">${formatWithSubSerial(item.total_units_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Weight in KG" class="format-aed">${formatWithSubSerial(item.weight_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Total Material" class="format-aed">${formatWithSubSerial(item.total_material_combined)}</td>`);
-                if (isMultipleEntry) {
-                    $row.append(`<td data-bs-toggle="tooltip" title="Invoice Total Material" class="format-aed">AED ${Number(item.total_material_sum || 0).toFixed(2)}</td>`);
-                } else {
-                    $row.append(`<td></td>`);
-                }
-                $row.append(`<td data-bs-toggle="tooltip" title="Shipping Rate" class="format-aed">${formatWithSubSerial(item.shipping_rate_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="DGD" class="format-aed">${formatWithSubSerial(item.dgd_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Labeling Charges" class="format-aed">${formatWithSubSerial(item.labeling_charges_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Labour" class="format-aed">${formatWithSubSerial(item.labour_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Shipping Cost" class="format-aed">${formatWithSubSerial(item.shipping_cost_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Total" class="format-aed">${formatWithSubSerial(item.total_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Cost/Unit AED" class="format-aed">${formatWithSubSerial(item.cost_per_unit_aed_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Cost/Unit USD" class="format-aed">${formatWithSubSerial(item.cost_per_unit_usd_combined)}</td>`);
-                $row.append(`
-                    <td>
-                        <button class="btn btn-sm btn-success edit-rh-btn" data-bs-toggle="tooltip" title="Edit"><i class="bi bi-pencil-square"></i></button>
-                        <button class="btn btn-sm btn-danger delete-rh-btn" data-id="${item.id}" data-bs-toggle="tooltip" title="Delete"><i class="bi bi-trash"></i></button>
-                        <button class="btn btn-sm btn-secondary copy-rh-btn" data-bs-toggle="tooltip" title="Copy"><i class="bi bi-files"></i></button>
-                    </td>
-                `);
-
-                $('#rh-client-body').append($row);
-            });
-            // Update the summary card with the calculated totals
-            $('#rh-total-material').text('AED ' + totalMaterialSum.toLocaleString(undefined, { minimumFractionDigits: 2 }));
-            $('#rh-total-shipment').text('AED ' + totalShipmentSum.toLocaleString(undefined, { minimumFractionDigits: 2 }));
-            $('#rh-grand-total').text('AED ' + grandTotalSum.toLocaleString(undefined, { minimumFractionDigits: 2 }));
-
-            applyNumberFormatting();
-
-            $('[data-bs-toggle="tooltip"]').tooltip();
-        },
-        error: function (xhr) {
-            console.error("Load RH Clients Error:", xhr.responseText);
-            alert("Failed to load RH client data.");
-        }
-    });
-}
-
-function formatRHDate(dateStr) {
-    if (!dateStr) return '';
-    const d = new Date(dateStr);
-    if (isNaN(d)) return '';
-
-    const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
-    return d.toLocaleDateString('en-GB', options);  // "Wednesday, 21 May 2025"
-}
-
-function exportRHExcel() {
-    const wb = XLSX.utils.book_new();
-    const wsData = [];
-
-    // Get headers (exclude the filter row)
-    const headers = [];
-    $('#sheet-rh table thead tr:eq(0) th').each(function (index) {
-        if (index < 19) headers.push($(this).text().trim());
-    });
-    wsData.push(headers);
-
-    $('#sheet-rh table tbody tr').each(function () {
-        const cells = $(this).find('td');
-        const allColumns = [];
-
-        cells.each(function (i) {
-            if (i < 19) {
-                const raw = $(this).html().trim().replace(/<br\s*\/?>/gi, '\n'); // convert line breaks to newline
-                const lines = raw.split('\n').map(v => v.trim()).filter(Boolean);
-
-                // Ensure at least 1 line exists for alignment
-                allColumns.push(lines.length ? lines : ['']);
-            }
-        });
-
-        const maxLines = Math.max(...allColumns.map(col => col.length));
-
-        for (let i = 0; i < maxLines; i++) {
-            const row = [];
-            allColumns.forEach(col => {
-                row.push(col[i] !== undefined ? col[i] : '');
-            });
-            wsData.push(row);
-        }
-    });
-
-    // Add summary
-    wsData.push([]);
-    wsData.push(['Total Material', $('#rh-total-material').text()]);
-    wsData.push(['Total Shipment', $('#rh-total-shipment').text()]);
-    wsData.push(['Grand Total', $('#rh-grand-total').text()]);
-
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-    // Apply wrap text to all cells
-    const range = XLSX.utils.decode_range(ws['!ref']);
-    for (let R = range.s.r; R <= range.e.r; ++R) {
-        for (let C = range.s.c; C <= range.e.c; ++C) {
-            const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
-            if (ws[cellRef]) {
-                if (!ws[cellRef].s) ws[cellRef].s = {};
-                ws[cellRef].s.alignment = { wrapText: true };
-            }
-        }
-    }
-
-    XLSX.utils.book_append_sheet(wb, ws, "RH Sheet");
-    XLSX.writeFile(wb, 'rh_sheet.xlsx');
-}
-
-// common funtion
-function convertToISO(dateStr) {
-    // Input: "Wednesday, 15 May 2025"
-    const match = dateStr.match(/\d{1,2} \w+ \d{4}/); // => "15 May 2025"
-    if (!match) return null;
-
-    const parsed = new Date(match[0]);
-    if (isNaN(parsed)) return null;
-
-    const yyyy = parsed.getFullYear();
-    const mm = String(parsed.getMonth() + 1).padStart(2, '0');
-    const dd = String(parsed.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`; // Return in yyyy-mm-dd
-}
-
-function sendRHEntry() {
-    const form = $('#rhClientForm')[0];
-    const formData = new FormData(form);
-
-    $.ajax({
-        url: '/rh-client/save',
-        method: 'POST',
-        data: formData,
-        contentType: false,
-        processData: false,
-        success: function (response) {
-            if (response.success) {
-                $('#rhClientForm')[0].reset();
-                $('#rhTotalUnitsHidden').val('');
-                loadRHClients();
-                $('html, body').animate({
-                    scrollTop: $('#rh-client-body').closest('table').offset().top - 100
-                }, 500);
-            } else {
-                alert('Save failed. Check response.');
-            }
-        },
-        error: function (xhr) {
-            alert('Error saving entry');
-            console.log(xhr.responseText);
-        }
-    });
-}
-
-function sendRHEntryEdit() {
-    if (editingRHId === null || isNaN(editingRHId)) {
-        alert("Missing record ID.");
+    if (!rows || !rows.length) {
+        $body.append(`<tr class="ls-empty">
+      <td colspan="6" class="px-3 py-3 text-gray-500">No rows yet.</td>
+    </tr>`);
+        $('#localTotalSales').text('AED 0.00');
+        $('#localTotalCount').text('0 records');
+        initTippy();
         return;
     }
 
-    const noOfCtns = parseFloat($('#rhNoOfCtns').val()) || 0;
-    const unitsPerCtn = parseFloat($('#rhUnitsPerCtn').val()) || 0;
-    const manualTotalUnits = parseFloat($('#rhTotalUnitsHidden').val()) || 0;
-
-    let totalUnits = 0;
-    if (noOfCtns > 0 && unitsPerCtn > 0) {
-        totalUnits = noOfCtns * unitsPerCtn;
-    } else if (manualTotalUnits > 0) {
-        totalUnits = manualTotalUnits;
-    } else {
-        $('#rhManualUnitsModal').data('source', 'edit');
-        $('#rhManualUnitsModal').modal('show');
-        return;
-    }
-
-    const data = {
-        date: $('#rhDate').val(),
-        supplier_name: $('#supplierName').val(),
-        description: $('#rhDescription').val(),
-        no_of_ctns: noOfCtns,
-        units_per_ctn: unitsPerCtn,
-        unit_price: $('#rhUnitPrice').val(),
-        weight: $('#rhWeight').val(),
-        shipping_rate_per_kg: $('#rhShippingRate').val(),
-        total_units: totalUnits,
-        _token: $('meta[name="csrf-token"]').attr('content')
-    };
-
-    const url = window.editingRHSubSerial
-        ? `/rh-client/update-subentry/${editingRHId}/${editingRHSubSerial}`
-        : `/rh-client/update/${editingRHId}`;
-
-    $.ajax({
-        url: url,
-        type: 'PUT',
-        data: data,
-        success: function () {
-            alert('Updated successfully!');
-            editingRHId = null;
-            editingRHSubSerial = null;
-            $('#rhClientForm')[0].reset();
-            $('#rhTotalUnitsHidden').val('');
-            $('#rhSubmitBtn').removeClass('d-none');
-            $('#rhSaveChangesBtn').addClass('d-none');
-            loadRHClients();
-            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-        },
-        error: function () {
-            alert('Update failed.');
-        }
-    });
-}
-
-// Render table and update totals
-function renderRhLoanTable() {
-    const tbody = $('#rhLoanTable tbody');
-    tbody.empty();
-
-    let totalPaid = 0;
-    rhLoanEntries.forEach((entry, index) => {
-        totalPaid += parseFloat(entry.amount);
-        const row = `
-            <tr data-id="${entry.id}">
-                <td data-bs-toggle="tooltip" title="SR.NO">${index + 1}</td>
-                <td data-bs-toggle="tooltip" title="Date" data-date="${entry.date}">${formatDate(entry.date)}</td>
-                <td data-bs-toggle="tooltip" title="Description">${entry.description}</td>
-                <td data-bs-toggle="tooltip" title="Amount">
-                    AED ${parseFloat(entry.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                </td>
-                <td>
-                    <button class="btn btn-sm btn-success ms-1 rh-edit-loan-btn" data-bs-toggle="tooltip" title="Edit" data-id="${entry.id}">
-                        <i class="bi bi-pencil-square"></i>
-                    </button>
-                    <button class="btn btn-sm btn-danger ms-2 rh-delete-loan-btn" data-bs-toggle="tooltip" title="Delete" data-id="${entry.id}">
-                        <i class="bi bi-trash"></i>
-                    </button>
-                </td>
-            </tr>
-        `;
-        $('[data-bs-toggle="tooltip"]').tooltip();
-        tbody.append(row);
-    });
-
-    // Update summary cards
-    $('#rhLoanTotalPaid').text(`AED ${totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}`);
-
-    const rhSheetTotal = parseFloat($('#rh-grand-total').text().replace(/[^\d.-]/g, '')) || 0;
-    $('#rhLoanTotalSheet').text(`AED ${rhSheetTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}`);
-
-    const balance = totalPaid - rhSheetTotal;
-    $('#rhLoanBalance').text(`AED ${balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}`);
-}
-
-// Utility function
-function formatDate(dateString) {
-    const options = { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' };
-    return new Date(dateString).toLocaleDateString(undefined, options);
-}
-
-// Reset form to Add mode
-function resetLoanForm() {
-    editingLoanId = null;
-    $('#rhLoanForm')[0].reset();
-    $('#rhLoanSubmitBtn').text('Add Entry').removeClass('btn-primary').addClass('btn-success');
-}
-
-// Reload table
-function reloadLoanData() {
-    $.get('/rh-loan/entries', function (data) {
-        rhLoanEntries = data;
-        renderRhLoanTable();
-    });
-}
-
-// FF Sheet Logic Initialization
-let ffMultiEntryData = [];
-let ffCurrentStep = 1;
-
-let editingFFGroup = null;
-
-function initFFLogic() {
-    $.ajaxSetup({
-        headers: {
-            'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
-        }
-    });
-
-    $('#ffSubmitBtn').on('click', function (e) {
-        e.preventDefault();
-
-        const noOfCtns = parseFloat($('#ffNoOfCtns').val());
-        const unitsPerCtn = parseFloat($('#ffUnitsPerCtn').val());
-
-        if ((!noOfCtns || noOfCtns === 0) && (!unitsPerCtn || unitsPerCtn === 0)) {
-            $('#ffManualTotalUnitsInput').val('');
-            $('#ffManualUnitsModal').data('source', 'submit');
-            $('#ffManualUnitsModal').modal('show');
-            return;
-        }
-
-        // Otherwise, send directly
-        sendFFEntry();
-    });
-
-    $('#ffConfirmManualUnitsBtn').on('click', function () {
-        const manualUnits = parseFloat($('#ffManualTotalUnitsInput').val());
-
-        if (!manualUnits || manualUnits <= 0) {
-            alert('Please enter a valid total number of units.');
-            return;
-        }
-
-        $('#ffTotalUnitsHidden').val(manualUnits);
-        $('#ffManualTotalUnitsInput').val('');
-        $('#ffManualUnitsModal').modal('hide');
-
-        const mode = $('#ffManualUnitsModal').data('source');
-        if (mode === 'edit') {
-            sendFFEntryEdit();
-        } else {
-            sendFFEntry();
-        }
-    });
-
-    // Open Multiple Entry Modal
-    $('#openFFMultiEntryModalBtn').on('click', function () {
-        ffMultiEntryData = [];
-        ffCurrentStep = 1;
-        $('#ff-multi-step-wrapper').show();
-        $('#ff-entry-fields-container').hide();
-        $('#ff-number-of-entries').val('');
-        $('#ffMultiEntryModal').modal('show');
-    });
-
-    $('#ff-start-entry-btn').on('click', function () {
-        const count = parseInt($('#ff-number-of-entries').val());
-        if (!count || count < 1) {
-            alert("Enter valid number");
-            return;
-        }
-        ffMultiEntryData = new Array(count).fill({});
-        ffCurrentStep = 1;
-        showFFEntryForm(ffCurrentStep);
-        $('#ff-multi-step-wrapper').hide();
-        $('#ff-entry-fields-container').show();
-    });
-
-    $('#ff-next-entry-btn').on('click', function () {
-        const $row = $('.entry-row[data-step="' + ffCurrentStep + '"]');
-        const noOfCtns = parseFloat($row.find('[name="no_of_ctns"]').val()) || 0;
-        const unitsPerCtn = parseFloat($row.find('[name="units_per_ctn"]').val()) || 0;
-
-        if ((!noOfCtns || noOfCtns === 0) && (!unitsPerCtn || unitsPerCtn === 0)) {
-            const manualInput = $row.find('[name="manual_total_units"]');
-            if (manualInput.length === 0) {
-                $row.append(`
-                <div class="col-md-6">
-                    <input type="number" step="any" class="form-control border-danger mt-2" name="manual_total_units" placeholder="⚠️ Total No of Units (required if CTNS or Units/CTN missing)">
-                </div>
-            `);
-                return;
-            }
-
-            const manualUnits = parseFloat(manualInput.val());
-            if (!manualUnits || manualUnits <= 0) {
-                alert("Please enter Total No of Units.");
-                return;
-            }
-        }
-
-        storeFFEntryData(ffCurrentStep);
-        if (ffCurrentStep < ffMultiEntryData.length) {
-            ffCurrentStep++;
-            showFFEntryForm(ffCurrentStep);
-        } else {
-            $('#ff-next-entry-btn').hide();
-            $('#ff-submit-multi-entry').removeClass('d-none');
-        }
-    });
-
-    $('#ff-prev-entry-btn').on('click', function () {
-        storeFFEntryData(ffCurrentStep);
-        if (ffCurrentStep > 1) {
-            ffCurrentStep--;
-            showFFEntryForm(ffCurrentStep);
-        }
-    });
-
-    $('#ff-multi-entry-form').submit(function (e) {
-        e.preventDefault();
-        storeFFEntryData(ffCurrentStep);
-        const supplier = $('#ffClientForm').find('[name="supplier_name"]').val().trim();
-        const date = $('#ffDate').val();
-
-        if (!supplier || !date) {
-            alert("Supplier name and date are required.");
-            return;
-        }
-
-        $.ajax({
-            url: '/ff-client/save-multiple',
-            method: 'POST',
-            headers: {
-                'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
-            },
-            data: {
-                date: date,
-                supplier_name: supplier,
-                entries: ffMultiEntryData,
-                multiple_entry: true  // This flag tells backend it's grouped entry
-            },
-            success: function () {
-                $('#ffMultiEntryModal').modal('hide');
-                alert('Multiple entries saved!');
-                loadFFClients();
-                window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-            },
-            error: function (xhr) {
-                console.error(xhr.responseText);
-                alert("Error saving multiple entries.");
-            }
-        });
-    });
-
-    function showFFEntryForm(step) {
-        const entry = ffMultiEntryData[step - 1] || {};
-        const html = `
-        <div class="step-label mb-2"><strong>Entry ${step}</strong></div>
-        <div class="row g-3 entry-row" data-step="${step}">
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="unit_price" placeholder="Unit Price" value="${entry.unit_price || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="text" class="form-control" name="description" placeholder="Description" value="${entry.description || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="no_of_ctns" placeholder="No of CTNS" value="${entry.no_of_ctns || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="units_per_ctn" placeholder="Units/CTN" value="${entry.units_per_ctn || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="weight" placeholder="Weight in KG" value="${entry.weight || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="shipping_rate_per_kg" placeholder="Shipping Rate/KG" value="${entry.shipping_rate_per_kg || ''}">
-            </div>
-        </div>
-    `;
-        $('#ff-entry-form-fields').html(html);
-    }
-
-    function storeFFEntryData(step) {
-        const $row = $('.entry-row[data-step="' + step + '"]');
-
-        ffMultiEntryData[step - 1] = {
-            unit_price: parseFloat($row.find('[name="unit_price"]').val()) || 0,
-            description: $row.find('[name="description"]').val() || '',
-            no_of_ctns: parseFloat($row.find('[name="no_of_ctns"]').val()) || 0,
-            units_per_ctn: parseFloat($row.find('[name="units_per_ctn"]').val()) || 0,
-            weight: parseFloat($row.find('[name="weight"]').val()) || 0,
-            shipping_rate_per_kg: parseFloat($row.find('[name="shipping_rate_per_kg"]').val()) || 0,
-            manual_total_units: parseFloat($row.find('[name="manual_total_units"]').val()) || 0
-        };
-    }
-
-    $(document).on('click', '.edit-ff-btn', function () {
-        const $row = $(this).parents('tr[data-id]');
-        const id = $row.data('id');
-        const subSerials = $row.data('subserials');
-
-        if (subSerials && subSerials.length > 1) {
-            editingFFGroup = {
-                sr_no: $row.data('sr-no'),
-                subSerials: subSerials
-            };
-            editingFFId = id;
-
-            $('#ffEditSubSerialInput').val('');
-            $('#ffEditSubEntryModal').modal('show');
-        } else {
-            editingFFId = id;
-            $('#ffDate').val($row.data('date'));
-            $('#ffSupplierName').val($row.data('supplier'));
-            $('#ffDescription').val($row.find('td:eq(3)').text().trim());
-            $('#ffNoOfCtns').val($row.find('td:eq(4)').text().trim());
-            $('#ffUnitsPerCtn').val($row.find('td:eq(5)').text().trim());
-            $('#ffUnitPrice').val($row.find('td:eq(6)').text().replace('AED', '').trim());
-            $('#ffWeight').val($row.find('td:eq(8)').text().trim());
-            $('#ffShippingRate').val($row.data('shipping-rate-per-kg'));
-
-            $('#ffSubmitBtn').addClass('d-none');
-            $('#ffSaveChangesBtn').removeClass('d-none');
-            $('html, body').animate({ scrollTop: 0 }, 300);
-        }
-    });
-
-    $('#confirmFFSubSerialEditBtn').on('click', function () {
-        const subSerial = parseInt($('#ffEditSubSerialInput').val().trim());
-
-        if (!subSerial || !editingFFGroup || !editingFFGroup.sr_no) {
-            alert("Missing serial number or sub-serial.");
-            return;
-        }
-
-        const srNo = parseInt(editingFFGroup.sr_no);
-
-        console.log("🔍 Looking for entry with:", { sr_no: srNo, sub_serial: subSerial });
-
-        $.getJSON('/ff-client/data-all', function (fullData) {
-            const row = fullData.find(entry =>
-                parseInt(entry.sr_no) === srNo &&
-                parseInt(entry.sub_serial) === subSerial
-            );
-
-            if (!row) {
-                alert("Could not load data.");
-                return;
-            }
-
-            editingFFId = row.id;
-            editingFFSubSerial = subSerial;
-
-            // Populate form fields
-            $('html, body').animate({ scrollTop: 0 }, 300);
-            $('#ffDate').val(row.date);
-            $('#ffsupplierName').val(row.supplier_name || '');
-            $('#ffDescription').val(row.description || '');
-            $('#ffNoOfCtns').val(row.no_of_ctns || '');
-            $('#ffUnitsPerCtn').val(row.units_per_ctn || '');
-            $('#ffUnitPrice').val(row.unit_price || '');
-            $('#ffWeight').val(row.weight || '');
-            $('#ffShippingRate').val(row.shipping_rate_per_kg || '');
-
-            $('#ffSubmitBtn').addClass('d-none');
-            $('#ffSaveChangesBtn').removeClass('d-none');
-
-            $('#ffEditSubEntryModal').modal('hide');
-            $('#ffEditSubSerialInput').val('');
-        });
-    });
-
-    $('#ffSaveChangesBtn').on('click', function () {
-        sendFFEntryEdit();
-    });
-
-    $(document).on('click', '.delete-ff-btn', function () {
-        const $row = $(this).closest('tr');
-        const id = $row.data('id');
-        const date = $row.data('date');
-
-        let supplier = $row.data('supplier');
-        if (!supplier) {
-            supplier = $row.find('td:eq(2)').text().trim();
-        }
-
-        const subSerials = JSON.parse($row.attr('data-subserials') || '[]');
-        const isMultiple = subSerials.length > 1;
-
-        $('#ffDeleteRowId').val(id);
-        $('#ffDeleteDate').val(date);
-        $('#ffDeleteSupplier').val(supplier);
-
-        if (isMultiple) {
-            $('#ffDeleteMessage').html(`
-            This is a multiple entry.<br>
-            <b>Date:</b> ${date}<br>
-            <b>Supplier:</b> ${supplier}<br>
-            Enter sub-serial number (e.g., <strong>1</strong>) or type <strong>all</strong>.
-            `);
-            $('#ffSubSerialInputWrapper').show();
-            setTimeout(() => {
-                $('#ffDeleteSubSerialInput').focus();
-            }, 100);
-        } else {
-            $('#ffDeleteMessage').text('Are you sure you want to delete this FF entry?');
-            $('#ffSubSerialInputWrapper').hide();
-        }
-
-        $('#ffDeleteModal').modal('show');
-    });
-
-    $('#confirmFFDeleteBtn').on('click', function () {
-        const isMultiple = $('#ffSubSerialInputWrapper').is(':visible');
-        const subSerial = $('#ffDeleteSubSerialInput').val().trim().toLowerCase();
-        const id = $('#ffDeleteRowId').val();
-        const date = $('#ffDeleteDate').val();
-        const supplier = $('#ffDeleteSupplier').val();
-
-        console.log("Deleting with:", { id, date, supplier, subSerial });
-
-        let url = '';
-        let method = '';
-        let data = {};
-
-        if (isMultiple) {
-            if (!subSerial) {
-                alert("Please enter sub-serial number or 'all'");
-                return;
-            }
-
-            // POST method for delete-multiple
-            url = '/ff-client/delete-multiple';
-            method = 'POST';
-            data = {
-                date: date,
-                supplier_name: supplier,
-                sub_serial: subSerial,
-                _token: $('meta[name="csrf-token"]').attr('content')
-            };
-        } else {
-            // Laravel DELETE method with CSRF
-            url = `/ff-client/delete/${id}`;
-            method = 'POST';
-            data = {
-                _method: 'DELETE', // Use _method override
-                _token: $('meta[name="csrf-token"]').attr('content')
-            };
-        }
-
-        $.ajax({
-            url: url,
-            type: method,
-            data: data,
-            success: function () {
-                $('#ffDeleteModal').modal('hide');
-                $('#ffDeleteSubSerialInput').val('');
-                loadFFClients();
-                alert("Deleted successfully.");
-            },
-            error: function (xhr) {
-                console.error(xhr.responseText);
-                alert("Failed to delete entry.");
-            }
-        });
-    });
-
-    $('#ffDeleteModal').on('shown.bs.modal', function () {
-        setTimeout(() => {
-            $('#ffDeleteSubSerialInput').focus();
-        }, 100);
-    });
-
-    $('#ffFilteredExcelBtn').on('click', function () {
-        const fromDate = $('#ffFromDate').val();
-        const toDate = $('#ffToDate').val();
-
-        if (!fromDate || !toDate) {
-            alert('Please select both dates.');
-            return;
-        }
-
-        const wb = XLSX.utils.book_new();
-        const headers = [];
-
-        $('#ff-export-table thead tr:eq(0) th').each(function (i) {
-            if (i !== 19) headers.push($(this).text().trim()); // Exclude Action column
-        });
-
-        const wsData = [headers];
-
-        $('#ff-client-body tr:visible').each(function () {
-            const rawDateStr = $(this).find('td:eq(1)').text().trim();
-            const formattedRowDate = convertToISO(rawDateStr);
-
-            if (!formattedRowDate) return;
-
-            if (formattedRowDate >= fromDate && formattedRowDate <= toDate) {
-                const rowData = [];
-                $(this).find('td').each(function (i) {
-                    if (i !== 19) {
-                        rowData.push($(this).text().trim().replace(/<br\s*\/?>/gi, '\n'));
-                    }
-                });
-                wsData.push(rowData);
-            }
-        });
-
-        if (wsData.length === 1) {
-            alert("No data in selected date range.");
-            return;
-        }
-
-        const ws = XLSX.utils.aoa_to_sheet(wsData);
-        XLSX.utils.book_append_sheet(wb, ws, "FF Sheet");
-        XLSX.writeFile(wb, 'ff_sheet_filtered.xlsx');
-    });
-
-    $('#applyFFDateFilter').on('click', function () {
-        const fromDate = $('#ffFromDate').val();
-        const toDate = $('#ffToDate').val();
-
-        if (!fromDate || !toDate) {
-            alert('Please select both From and To dates.');
-            return;
-        }
-
-        $('#ff-client-body tr').each(function () {
-            const rawDateStr = $(this).find('td:eq(1)').text().trim(); // Example: "Wednesday, 15 May 2025"
-            const formattedRowDate = convertToISO(rawDateStr); // Will be: "2025-05-15"
-
-            if (!formattedRowDate) {
-                $(this).hide();
-                return;
-            }
-
-            if (formattedRowDate >= fromDate && formattedRowDate <= toDate) {
-                $(this).show();
-            } else {
-                $(this).hide();
-            }
-        });
-
-        $('#ffFilteredExcelBtn').removeClass('d-none');
-        $('#ffDatePopupBox').fadeOut();
-        $('#ffDateFilterInput').val(`${fromDate} to ${toDate}`);
-    });
-
-    $('#clearFFDateFilter').on('click', function () {
-        $('#ff-client-body tr').show(); // Show all rows again
-        $('#ffFilteredExcelBtn').addClass('d-none');
-        $('#ffDateFilterInput').val('');
-        $('#ffDatePopupBox').fadeOut();
-    });
-
-    $('#ffDateFilterInput').on('click', function () {
-        const $input = $(this);
-        const $popup = $('#ffDatePopupBox'); // changed ID from #ffDatePopup
-        const popupHeight = $popup.outerHeight();
-        const popupWidth = $popup.outerWidth();
-        const inputOffset = $input.offset();
-        const windowHeight = $(window).height();
-        const windowWidth = $(window).width();
-
-        let topPosition = inputOffset.top + $input.outerHeight() + 5;
-        if ((topPosition + popupHeight) > $(window).scrollTop() + windowHeight) {
-            topPosition = inputOffset.top - popupHeight - 5;
-        }
-
-        let leftPosition = inputOffset.left;
-        if ((leftPosition + popupWidth) > windowWidth) {
-            leftPosition = windowWidth - popupWidth - 10;
-        }
-
-        $popup.css({
-            position: 'absolute',
-            top: `${topPosition}px`,
-            left: `${leftPosition}px`,
-            zIndex: 9999
-        }).appendTo('body').fadeIn();
-    });
-
-    $(document).on('click', function (e) {
-        if (!$(e.target).closest('#ffDateFilterInput, #ffDatePopupBox').length) {
-            $('#ffDatePopupBox').fadeOut();
-        }
-    });
-
-    $(document).on('click', '.copy-ff-btn', function () {
-        const $row = $(this).closest('tr[data-id]');
-        const subSerials = $row.data('subserials');
-
-        // Check if this is a multiple-entry row
-        const isMultiple = Array.isArray(subSerials) && subSerials.length > 1;
-
-        if (isMultiple) {
-            window.copyFFGroup = {
-                sr_no: $row.data('sr-no'),
-                subSerials: subSerials,
-                date: $row.data('date'),
-                supplier: $row.data('supplier')
-            };
-            $('#ffCopySubSerialInput').val('');
-            $('#ffCopySubEntryModal').modal('show');
-        } else {
-            // Handle normal (non-multiple) row copy
-            $('#ffDate').val($row.data('date'));
-            $('#ffSupplierName').val($row.data('supplier'));
-            $('#ffDescription').val($row.attr('data-description') || '');
-            $('#ffNoOfCtns').val($row.attr('data-no-of-ctns') || '');
-            $('#ffUnitsPerCtn').val($row.attr('data-units-per-ctn') || '');
-            $('#ffUnitPrice').val($row.attr('data-unit-price') || '');
-            $('#ffWeight').val($row.attr('data-weight') || '');
-            $('#ffShippingRate').val($row.attr('data-shipping-rate-per-kg') || '');
-
-            // Copy mode - show submit, hide save
-            $('#ffSubmitBtn').removeClass('d-none');
-            $('#ffSaveChangesBtn').addClass('d-none');
-            $('html, body').animate({ scrollTop: 0 }, 300);
-        }
-    });
-
-    $('#confirmFFSubSerialCopyBtn').on('click', function () {
-        const subSerial = parseInt($('#ffCopySubSerialInput').val().trim());
-
-        if (!subSerial || !window.copyFFGroup) {
-            alert("Please enter a valid sub-serial number.");
-            return;
-        }
-
-        $.getJSON('/ff-client/data-all', function (fullData) {
-            const matchedRow = fullData.find(entry =>
-                entry.sr_no &&
-                entry.sub_serial &&
-                parseInt(entry.sr_no) === parseInt(copyFFGroup.sr_no) &&
-                parseInt(entry.sub_serial) === subSerial
-            );
-
-            if (!matchedRow) {
-                alert("Sub-serial not found.");
-                return;
-            }
-
-            // Populate form fields
-            $('html, body').animate({ scrollTop: 0 }, 300);
-            $('#ffDate').val(matchedRow.date);
-            $('#ffSupplierName').val(matchedRow.supplier_name);
-            $('#ffDescription').val(matchedRow.description || '');
-            $('#ffNoOfCtns').val(matchedRow.no_of_ctns || '');
-            $('#ffUnitsPerCtn').val(matchedRow.units_per_ctn || '');
-            $('#ffUnitPrice').val(matchedRow.unit_price || '');
-            $('#ffWeight').val(matchedRow.weight || '');
-            $('#ffShippingRate').val(matchedRow.shipping_rate_per_kg || '');
-
-            // Set to copy mode (submit not save)
-            $('#ffSubmitBtn').removeClass('d-none');
-            $('#ffSaveChangesBtn').addClass('d-none');
-
-            $('#ffCopySubEntryModal').modal('hide');
-            $('#ffCopySubSerialInput').val('');
-        });
-    });
-
-    $(function () {
-        $('[data-bs-toggle="tooltip"]').tooltip();
-    });
-}
-
-function loadFFClients() {
-    $.ajax({
-        url: '/ff-client/data',
-        type: 'GET',
-        success: function (data) {
-            if (!Array.isArray(data)) {
-                console.error('Invalid data format:', data);
-                alert('Invalid response from server.');
-                return;
-            }
-
-            data.sort((a, b) => a.sr_no - b.sr_no);
-
-            $('#ff-client-body').empty();
-            let totalMaterialSum = 0;
-            let totalShipmentSum = 0;
-            let grandTotalSum = 0;
-
-            data.forEach(item => {
-                totalMaterialSum += item.total_material_sum || 0;
-                totalShipmentSum += item.shipping_cost_sum || 0;
-                grandTotalSum = totalMaterialSum + totalShipmentSum;
-
-                const isMultipleEntry = item.sub_serials && item.sub_serials.length > 1;
-
-                const formatWithSubSerial = (combinedValue) => {
-                    if (!combinedValue) return '';
-                    const values = combinedValue.split('<br>');
-                    return values.join('<br>');
-                };
-
-                const $row = $('<tr></tr>').attr({
-                    'data-id': item.id,
-                    'data-date': item.date,
-                    'data-sr-no': item.sr_no,
-                    'data-supplier-name': item.supplier_name,
-                    'data-subserials': JSON.stringify(item.sub_serials || [])
-                });
-
-                if (isMultipleEntry) {
-                    $row.addClass('multi-entry-row');
-                } else {
-                    $row.attr({
-                        'data-description': item.description?.toString() || '',
-                        'data-no-of-ctns': item.no_of_ctns?.toString() || '',
-                        'data-units-per-ctn': item.units_per_ctn?.toString() || '',
-                        'data-unit-price': item.unit_price?.toString() || '',
-                        'data-weight': item.weight?.toString() || '',
-                        'data-shipping-rate-per-kg': item.shipping_rate_per_kg?.toString() || ''
-                    });
-                }
-
-                $row.append(`<td data-bs-toggle="tooltip" title="SR.NO">${item.sr_no}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Date">${formatFFDate(item.date)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Supplier Name">${item.supplier_name || ''}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Description">${formatWithSubSerial(item.description_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="No. of CTNS" class="format-aed">${formatWithSubSerial(item.no_of_ctns_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Units/CTN" class="format-aed">${formatWithSubSerial(item.units_per_ctn_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Unit Price" class="format-aed">${formatWithSubSerial(item.unit_price_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Total No. of Units" class="format-aed">${formatWithSubSerial(item.total_units_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Weight in KG" class="format-aed">${formatWithSubSerial(item.weight_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Total Material" class="format-aed">${formatWithSubSerial(item.total_material_combined)}</td>`);
-                if (isMultipleEntry) {
-                    $row.append(`<td data-bs-toggle="tooltip" title="Invoice Total Material" class="format-aed">AED ${Number(item.total_material_sum || 0).toFixed(2)}</td>`);
-                } else {
-                    $row.append(`<td></td>`);
-                }
-                $row.append(`<td data-bs-toggle="tooltip" title="Shipping Rate" class="format-aed">${formatWithSubSerial(item.shipping_rate_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="DGD" class="format-aed">${formatWithSubSerial(item.dgd_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Labeling Charges" class="format-aed">${formatWithSubSerial(item.labeling_charges_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Labour"class="format-aed">${formatWithSubSerial(item.labour_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Shipping Cost" class="format-aed">${formatWithSubSerial(item.shipping_cost_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Total" class="format-aed">${formatWithSubSerial(item.total_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Cost/Unit AED" class="format-aed">${formatWithSubSerial(item.cost_per_unit_aed_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Cost/Unit USD" class="format-aed">${formatWithSubSerial(item.cost_per_unit_usd_combined)}</td>`);
-                $row.append(`
-                    <td>
-                        <button class="btn btn-sm btn-success edit-ff-btn" data-bs-toggle="tooltip" title="Edit"><i class="bi bi-pencil-square"></i></button>
-                        <button class="btn btn-sm btn-danger delete-ff-btn" data-id="${item.id}" data-bs-toggle="tooltip" title="Delete"><i class="bi bi-trash"></i></button>
-                        <button class="btn btn-sm btn-secondary copy-ff-btn" data-bs-toggle="tooltip" title="Copy"><i class="bi bi-files"></i></button>
-                    </td>
-                `);
-
-                $('#ff-client-body').append($row);
-            });
-            // Update the summary card with the calculated totals
-            $('#ff-total-material').text('AED ' + totalMaterialSum.toLocaleString(undefined, { minimumFractionDigits: 2 }));
-            $('#ff-total-shipment').text('AED ' + totalShipmentSum.toLocaleString(undefined, { minimumFractionDigits: 2 }));
-            $('#ff-grand-total').text('AED ' + grandTotalSum.toLocaleString(undefined, { minimumFractionDigits: 2 }));
-
-            applyNumberFormatting();
-
-            $('[data-bs-toggle="tooltip"]').tooltip();
-        },
-        error: function (xhr) {
-            console.error("Load FF Clients Error:", xhr.responseText);
-            alert("Failed to load FF client data.");
-        }
-    });
-}
-
-function formatFFDate(dateStr) {
-    if (!dateStr) return '';
-    const d = new Date(dateStr);
-    if (isNaN(d)) return '';
-
-    const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
-    return d.toLocaleDateString('en-GB', options);  // "Wednesday, 21 May 2025"
-}
-
-function exportFFExcel() {
-    const wb = XLSX.utils.book_new();
-    const wsData = [];
-
-    // Get headers (exclude the filter row)
-    const headers = [];
-    $('#sheet-ff table thead tr:eq(0) th').each(function (index) {
-        if (index < 19) headers.push($(this).text().trim());
-    });
-    wsData.push(headers);
-
-    $('#sheet-ff table tbody tr').each(function () {
-        const cells = $(this).find('td');
-        const allColumns = [];
-
-        cells.each(function (i) {
-            if (i < 19) {
-                const raw = $(this).html().trim().replace(/<br\s*\/?>/gi, '\n'); // convert line breaks to newline
-                const lines = raw.split('\n').map(v => v.trim()).filter(Boolean);
-
-                // Ensure at least 1 line exists for alignment
-                allColumns.push(lines.length ? lines : ['']);
-            }
-        });
-
-        const maxLines = Math.max(...allColumns.map(col => col.length));
-
-        for (let i = 0; i < maxLines; i++) {
-            const row = [];
-            allColumns.forEach(col => {
-                row.push(col[i] !== undefined ? col[i] : '');
-            });
-            wsData.push(row);
-        }
-    });
-
-    // Add summary
-    wsData.push([]);
-    wsData.push(['Total Material', $('#ff-total-material').text()]);
-    wsData.push(['Total Shipment', $('#ff-total-shipment').text()]);
-    wsData.push(['Grand Total', $('#ff-grand-total').text()]);
-
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-    // Apply wrap text to all cells
-    const range = XLSX.utils.decode_range(ws['!ref']);
-    for (let R = range.s.r; R <= range.e.r; ++R) {
-        for (let C = range.s.c; C <= range.e.c; ++C) {
-            const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
-            if (ws[cellRef]) {
-                if (!ws[cellRef].s) ws[cellRef].s = {};
-                ws[cellRef].s.alignment = { wrapText: true };
-            }
-        }
-    }
-
-    XLSX.utils.book_append_sheet(wb, ws, "FF Sheet");
-    XLSX.writeFile(wb, 'ff_sheet.xlsx');
-}
-
-function sendFFEntry() {
-    const form = $('#ffClientForm')[0];
-    const formData = new FormData(form);
-
-    $.ajax({
-        url: '/ff-client/save',
-        method: 'POST',
-        data: formData,
-        contentType: false,
-        processData: false,
-        success: function (response) {
-            if (response.success) {
-                $('#ffClientForm')[0].reset();
-                $('#ffTotalUnitsHidden').val('');
-                loadFFClients();
-                window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-            } else {
-                alert('Save failed. Check response.');
-            }
-        },
-        error: function (xhr) {
-            alert('Error saving entry');
-            console.log(xhr.responseText);
-        }
-    });
-}
-
-function sendFFEntryEdit() {
-    console.log("editingFFId:", editingFFId);
-
-    if (editingFFId === null || isNaN(editingFFId)) {
-        alert("Missing record ID.");
-        return;
-    }
-
-    const noOfCtns = parseFloat($('#ffNoOfCtns').val()) || 0;
-    const unitsPerCtn = parseFloat($('#ffUnitsPerCtn').val()) || 0;
-    const manualTotalUnits = parseFloat($('#ffTotalUnitsHidden').val()) || 0;
-
-    // Calculate total units
-    let totalUnits = 0;
-    if (noOfCtns > 0 && unitsPerCtn > 0) {
-        totalUnits = noOfCtns * unitsPerCtn;
-    } else if (manualTotalUnits > 0) {
-        totalUnits = manualTotalUnits;
-    } else {
-        // Save flag so we know we're editing
-        $('#ffManualUnitsModal').data('source', 'edit');
-        $('#ffManualUnitsModal').modal('show');
-        return;
-    }
-
-    const data = {
-        date: $('#ffDate').val(),
-        supplier_name: $('#ffSupplierName').val(),
-        description: $('#ffDescription').val(),
-        no_of_ctns: noOfCtns,
-        units_per_ctn: unitsPerCtn,
-        unit_price: $('#ffUnitPrice').val(),
-        weight: $('#ffWeight').val(),
-        shipping_rate_per_kg: $('#ffShippingRate').val(),
-        total_units: totalUnits,
-        _token: $('meta[name="csrf-token"]').attr('content')
-    };
-
-    const url = window.editingFFSubSerial
-        ? `/ff-client/update-subentry/${editingFFId}/${editingFFSubSerial}`
-        : `/ff-client/update/${editingFFId}`;
-
-    $.ajax({
-        url: url,
-        type: 'PUT',
-        data: data,
-        success: function () {
-            alert('Updated successfully!');
-            editingFFId = null;
-            editingFFSubSerial = null;
-            $('#ffClientForm')[0].reset();
-            $('#ffTotalUnitsHidden').val('');
-            $('#ffSubmitBtn').removeClass('d-none');
-            $('#ffSaveChangesBtn').addClass('d-none');
-            loadFFClients();
-            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-        },
-        error: function () {
-            alert('Update failed.');
-        }
-    });
-}
-
-// BL Sheet Logic Initialization
-let blMultiEntryData = [];
-let blCurrentStep = 1;
-
-let editingBLGroup = null;
-
-function initBLLogic() {
-    $.ajaxSetup({
-        headers: {
-            'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
-        }
-    });
-
-    $('#blSubmitBtn').on('click', function (e) {
-        e.preventDefault();
-
-        const noOfCtns = parseFloat($('#blNoOfCtns').val());
-        const unitsPerCtn = parseFloat($('#blUnitsPerCtn').val());
-
-        if ((!noOfCtns || noOfCtns === 0) && (!unitsPerCtn || unitsPerCtn === 0)) {
-            $('#blManualTotalUnitsInput').val('');
-            $('#blManualUnitsModal').data('source', 'submit');
-            $('#blManualUnitsModal').modal('show');
-            return;
-        }
-
-        // Otherwise, send directly
-        sendBLEntry();
-    });
-
-    $('#blConfirmManualUnitsBtn').on('click', function () {
-        const manualUnits = parseFloat($('#blManualTotalUnitsInput').val());
-
-        if (!manualUnits || manualUnits <= 0) {
-            alert('Please enter a valid total number of units.');
-            return;
-        }
-
-        $('#blTotalUnitsHidden').val(manualUnits);
-        $('#blManualTotalUnitsInput').val('');
-        $('#blManualUnitsModal').modal('hide');
-
-        const mode = $('#blManualUnitsModal').data('source');
-        if (mode === 'edit') {
-            sendBLEntryEdit();
-        } else {
-            sendBLEntry();
-        }
-    });
-
-    // Open Multiple Entry Modal
-    $('#openBLMultiEntryModalBtn').on('click', function () {
-        blMultiEntryData = [];
-        blCurrentStep = 1;
-        $('#bl-multi-step-wrapper').show();
-        $('#bl-entry-fields-container').hide();
-        $('#bl-number-of-entries').val('');
-        $('#blMultiEntryModal').modal('show');
-    });
-
-    $('#bl-start-entry-btn').on('click', function () {
-        const count = parseInt($('#bl-number-of-entries').val());
-        if (!count || count < 1) {
-            alert("Enter valid number");
-            return;
-        }
-        blMultiEntryData = new Array(count).fill({});
-        blCurrentStep = 1;
-        showBLEntryForm(blCurrentStep);
-        $('#bl-multi-step-wrapper').hide();
-        $('#bl-entry-fields-container').show();
-    });
-
-    $('#bl-next-entry-btn').on('click', function () {
-        const $row = $('.entry-row[data-step="' + blCurrentStep + '"]');
-        const noOfCtns = parseFloat($row.find('[name="no_of_ctns"]').val()) || 0;
-        const unitsPerCtn = parseFloat($row.find('[name="units_per_ctn"]').val()) || 0;
-
-        if ((!noOfCtns || noOfCtns === 0) && (!unitsPerCtn || unitsPerCtn === 0)) {
-            const manualInput = $row.find('[name="manual_total_units"]');
-            if (manualInput.length === 0) {
-                $row.append(`
-                <div class="col-md-6">
-                    <input type="number" step="any" class="form-control border-danger mt-2" name="manual_total_units" placeholder="⚠️ Total No of Units (required if CTNS or Units/CTN missing)">
-                </div>
-            `);
-                return;
-            }
-
-            const manualUnits = parseFloat(manualInput.val());
-            if (!manualUnits || manualUnits <= 0) {
-                alert("Please enter Total No of Units.");
-                return;
-            }
-        }
-
-        storeBLEntryData(blCurrentStep);
-        if (blCurrentStep < blMultiEntryData.length) {
-            blCurrentStep++;
-            showBLEntryForm(blCurrentStep);
-        } else {
-            $('#bl-next-entry-btn').hide();
-            $('#bl-submit-multi-entry').removeClass('d-none');
-        }
-    });
-
-    $('#bl-prev-entry-btn').on('click', function () {
-        storeBLEntryData(blCurrentStep);
-        if (blCurrentStep > 1) {
-            blCurrentStep--;
-            showBLEntryForm(blCurrentStep);
-        }
-    });
-
-    $('#bl-multi-entry-form').submit(function (e) {
-        e.preventDefault();
-        storeBLEntryData(blCurrentStep);
-        const supplier = $('#blClientForm').find('[name="supplier_name"]').val().trim();
-        const date = $('#blDate').val();
-
-        if (!supplier || !date) {
-            alert("Supplier name and date are required.");
-            return;
-        }
-
-        $.ajax({
-            url: '/bl-client/save-multiple',
-            method: 'POST',
-            headers: {
-                'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
-            },
-            data: {
-                date: date,
-                supplier_name: supplier,
-                entries: blMultiEntryData,
-                multiple_entry: true  // This flag tells backend it's grouped entry
-            },
-            success: function () {
-                $('#blMultiEntryModal').modal('hide');
-                alert('Multiple entries saved!');
-                loadBLClients();
-                window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-            },
-            error: function (xhr) {
-                console.error(xhr.responseText);
-                alert("Error saving multiple entries.");
-            }
-        });
-    });
-
-    function showBLEntryForm(step) {
-        const entry = blMultiEntryData[step - 1] || {};
-        const html = `
-        <div class="step-label mb-2"><strong>Entry ${step}</strong></div>
-        <div class="row g-3 entry-row" data-step="${step}">
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="unit_price" placeholder="Unit Price" value="${entry.unit_price || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="text" class="form-control" name="description" placeholder="Description" value="${entry.description || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="no_of_ctns" placeholder="No of CTNS" value="${entry.no_of_ctns || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="units_per_ctn" placeholder="Units/CTN" value="${entry.units_per_ctn || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="weight" placeholder="Weight in KG" value="${entry.weight || ''}">
-            </div>
-            <div class="col-md-4">
-                <input type="number" step="any" class="form-control" name="shipping_rate_per_kg" placeholder="Shipping Rate/KG" value="${entry.shipping_rate_per_kg || ''}">
-            </div>
-        </div>
-    `;
-        $('#bl-entry-form-fields').html(html);
-    }
-
-    function storeBLEntryData(step) {
-        const $row = $('.entry-row[data-step="' + step + '"]');
-
-        blMultiEntryData[step - 1] = {
-            unit_price: parseFloat($row.find('[name="unit_price"]').val()) || 0,
-            description: $row.find('[name="description"]').val() || '',
-            no_of_ctns: parseFloat($row.find('[name="no_of_ctns"]').val()) || 0,
-            units_per_ctn: parseFloat($row.find('[name="units_per_ctn"]').val()) || 0,
-            weight: parseFloat($row.find('[name="weight"]').val()) || 0,
-            shipping_rate_per_kg: parseFloat($row.find('[name="shipping_rate_per_kg"]').val()) || 0,
-            manual_total_units: parseFloat($row.find('[name="manual_total_units"]').val()) || 0
-        };
-    }
-
-    $(document).on('click', '.edit-bl-btn', function () {
-        const $row = $(this).parents('tr[data-id]');
-        const id = $row.data('id');
-        const subSerials = $row.data('subserials');
-
-        if (subSerials && subSerials.length > 1) {
-            editingBLGroup = {
-                date: $row.data('date'),
-                supplier: $row.data('supplier'),
-                subSerials: subSerials
-            };
-            editingBLId = id;
-
-            $('#blEditSubSerialInput').val('');
-            $('#blEditSubEntryModal').modal('show');
-        } else {
-            editingBLId = id;
-            $('#blDate').val($row.data('date'));
-            $('#supplierName').val($row.data('supplier'));
-            $('#blDescription').val($row.find('td:eq(3)').text().trim());
-            $('#blNoOfCtns').val($row.find('td:eq(4)').text().trim());
-            $('#blUnitsPerCtn').val($row.find('td:eq(5)').text().trim());
-            $('#blUnitPrice').val($row.find('td:eq(6)').text().replace('AED', '').trim());
-            $('#blWeight').val($row.find('td:eq(8)').text().trim());
-            $('#blShippingRate').val($row.data('shipping-rate-per-kg'));
-
-            $('#blSubmitBtn').addClass('d-none');
-            $('#blSaveChangesBtn').removeClass('d-none');
-            $('html, body').animate({ scrollTop: 0 }, 300);
-        }
-    });
-
-    $('#confirmBLSubSerialEditBtn').on('click', function () {
-        const subSerial = parseInt($('#blEditSubSerialInput').val().trim());
-
-        if (!subSerial || !editingBLGroup) {
-            alert("Please enter a valid sub-serial number.");
-            return;
-        }
-
-        // Get sr_no from the table row with matching date and supplier
-        const $row = $(`tr[data-date="${editingBLGroup.date}"][data-supplier="${editingBLGroup.supplier}"]`);
-        const srNo = parseInt($row.data('sr-no'));
-        const rowId = $row.data('id');
-
-        if (!srNo || isNaN(srNo)) {
-            alert("Serial number not found for the selected row.");
-            return;
-        }
-
-        editingBLGroup.sr_no = srNo;
-        editingBLId = rowId;
-
-        console.log("Looking for sub-serial:", {
-            subSerial,
-            sr_no: srNo
-        });
-
-        $.getJSON('/bl-client/data-all', function (fullData) {
-            const row = fullData.find(entry =>
-                parseInt(entry.sr_no) === srNo &&
-                parseInt(entry.sub_serial) === subSerial
-            );
-
-            if (!row) {
-                alert("Could not load data.");
-                return;
-            }
-
-            editingBLId = row.id;
-            editingBLSubSerial = subSerial;
-
-            // Populate fields
-            $('html, body').animate({ scrollTop: 0 }, 300);
-            $('#blDate').val(row.date);
-            $('#supplierName').val(row.supplier_name);
-            $('#blDescription').val(row.description || '');
-            $('#blNoOfCtns').val(row.no_of_ctns || '');
-            $('#blUnitsPerCtn').val(row.units_per_ctn || '');
-            $('#blUnitPrice').val(row.unit_price || '');
-            $('#blWeight').val(row.weight || '');
-            $('#blShippingRate').val(row.shipping_rate_per_kg || '');
-
-            $('#blSubmitBtn').addClass('d-none');
-            $('#blSaveChangesBtn').removeClass('d-none');
-            $('#blEditSubEntryModal').modal('hide');
-            $('#blEditSubSerialInput').val('');
-        });
-    });
-
-    $('#blSaveChangesBtn').on('click', function () {
-        sendBLEntryEdit();
-    });
-
-    $(document).on('click', '.delete-bl-btn', function () {
-        const $row = $(this).closest('tr');
-        const id = $row.data('id');
-        const date = $row.data('date');
-
-        let supplier = $row.data('supplier');
-        if (!supplier) {
-            supplier = $row.find('td:eq(2)').text().trim();
-        }
-
-        const subSerials = JSON.parse($row.attr('data-subserials') || '[]');
-        const isMultiple = subSerials.length > 1;
-
-        $('#blDeleteRowId').val(id);
-        $('#blDeleteDate').val(date);
-        $('#blDeleteSupplier').val(supplier);
-
-        if (isMultiple) {
-            $('#blDeleteMessage').html(`
-            This is a multiple entry.<br>
-            <b>Date:</b> ${date}<br>
-            <b>Supplier:</b> ${supplier}<br>
-            Enter sub-serial number (e.g., <strong>1</strong>) or type <strong>all</strong>.
-            `);
-            $('#blSubSerialInputWrapper').show();
-            setTimeout(() => {
-                $('#blDeleteSubSerialInput').focus();
-            }, 100);
-        } else {
-            $('#blDeleteMessage').text('Are you sure you want to delete this BL entry?');
-            $('#blSubSerialInputWrapper').hide();
-        }
-
-        $('#blDeleteModal').modal('show');
-    });
-
-    $('#confirmBLDeleteBtn').on('click', function () {
-        const isMultiple = $('#blSubSerialInputWrapper').is(':visible');
-        const subSerial = $('#blDeleteSubSerialInput').val().trim().toLowerCase();
-        const id = $('#blDeleteRowId').val();
-        const date = $('#blDeleteDate').val();
-        const supplier = $('#blDeleteSupplier').val();
-
-        console.log("Deleting with:", { id, date, supplier, subSerial });
-
-        let url = '';
-        let method = '';
-        let data = {};
-
-        if (isMultiple) {
-            if (!subSerial) {
-                alert("Please enter sub-serial number or 'all'");
-                return;
-            }
-
-            // POST method for delete-multiple
-            url = '/bl-client/delete-multiple';
-            method = 'POST';
-            data = {
-                date: date,
-                supplier_name: supplier,
-                sub_serial: subSerial,
-                _token: $('meta[name="csrf-token"]').attr('content')
-            };
-        } else {
-            // Laravel DELETE method with CSRF
-            url = `/bl-client/delete/${id}`;
-            method = 'POST';
-            data = {
-                _method: 'DELETE', // Use _method override
-                _token: $('meta[name="csrf-token"]').attr('content')
-            };
-        }
-
-        $.ajax({
-            url: url,
-            type: method,
-            data: data,
-            success: function () {
-                $('#blDeleteModal').modal('hide');
-                $('#blDeleteSubSerialInput').val('');
-                loadBLClients();
-                alert("Deleted successfully.");
-            },
-            error: function (xhr) {
-                console.error(xhr.responseText);
-                alert("Failed to delete entry.");
-            }
-        });
-    });
-
-    $('#blDeleteModal').on('shown.bs.modal', function () {
-        setTimeout(() => {
-            $('#blDeleteSubSerialInput').focus();
-        }, 100);
-    });
-
-    $('#blFilteredExcelBtn').on('click', function () {
-        const fromDate = $('#blFromDate').val();
-        const toDate = $('#blToDate').val();
-
-        if (!fromDate || !toDate) {
-            alert('Please select both dates.');
-            return;
-        }
-
-        const wb = XLSX.utils.book_new();
-        const headers = [];
-
-        $('#bl-export-table thead tr:eq(0) th').each(function (i) {
-            if (i !== 19) headers.push($(this).text().trim()); // Exclude Action column
-        });
-
-        const wsData = [headers];
-
-        $('#bl-client-body tr:visible').each(function () {
-            const rawDateStr = $(this).find('td:eq(1)').text().trim();
-            const formattedRowDate = convertToISO(rawDateStr);
-
-            if (!formattedRowDate) return;
-
-            if (formattedRowDate >= fromDate && formattedRowDate <= toDate) {
-                const rowData = [];
-                $(this).find('td').each(function (i) {
-                    if (i !== 19) {
-                        rowData.push($(this).text().trim().replace(/<br\s*\/?>/gi, '\n'));
-                    }
-                });
-                wsData.push(rowData);
-            }
-        });
-
-        if (wsData.length === 1) {
-            alert("No data in selected date range.");
-            return;
-        }
-
-        const ws = XLSX.utils.aoa_to_sheet(wsData);
-        XLSX.utils.book_append_sheet(wb, ws, "BL Sheet");
-        XLSX.writeFile(wb, 'bl_sheet_filtered.xlsx');
-    });
-
-    $('#applyBLDateFilter').on('click', function () {
-        const fromDate = $('#blFromDate').val();
-        const toDate = $('#blToDate').val();
-
-        if (!fromDate || !toDate) {
-            alert('Please select both From and To dates.');
-            return;
-        }
-
-        $('#bl-client-body tr').each(function () {
-            const rawDateStr = $(this).find('td:eq(1)').text().trim(); // Example: "Wednesday, 15 May 2025"
-            const formattedRowDate = convertToISO(rawDateStr); // Will be: "2025-05-15"
-
-            if (!formattedRowDate) {
-                $(this).hide();
-                return;
-            }
-
-            if (formattedRowDate >= fromDate && formattedRowDate <= toDate) {
-                $(this).show();
-            } else {
-                $(this).hide();
-            }
-        });
-
-        $('#blFilteredExcelBtn').removeClass('d-none');
-        $('#blDatePopupBox').fadeOut();
-        $('#blDateFilterInput').val(`${fromDate} to ${toDate}`);
-    });
-
-    $('#clearBLDateFilter').on('click', function () {
-        $('#bl-client-body tr').show(); // Show all rows again
-        $('#blFilteredExcelBtn').addClass('d-none');
-        $('#blDateFilterInput').val('');
-        $('#blDatePopupBox').fadeOut();
-    });
-
-    $('#blDateFilterInput').on('click', function () {
-        const $input = $(this);
-        const $popup = $('#blDatePopupBox'); // changed ID from #blDatePopup
-        const popupHeight = $popup.outerHeight();
-        const popupWidth = $popup.outerWidth();
-        const inputOffset = $input.offset();
-        const windowHeight = $(window).height();
-        const windowWidth = $(window).width();
-
-        let topPosition = inputOffset.top + $input.outerHeight() + 5;
-        if ((topPosition + popupHeight) > $(window).scrollTop() + windowHeight) {
-            topPosition = inputOffset.top - popupHeight - 5;
-        }
-
-        let leftPosition = inputOffset.left;
-        if ((leftPosition + popupWidth) > windowWidth) {
-            leftPosition = windowWidth - popupWidth - 10;
-        }
-
-        $popup.css({
-            position: 'absolute',
-            top: `${topPosition}px`,
-            left: `${leftPosition}px`,
-            zIndex: 9999
-        }).appendTo('body').fadeIn();
-    });
-
-    $(document).on('click', function (e) {
-        if (!$(e.target).closest('#blDateFilterInput, #blDatePopupBox').length) {
-            $('#blDatePopupBox').fadeOut();
-        }
-    });
-
-    $(document).on('click', '.copy-bl-btn', function () {
-        const $row = $(this).closest('tr[data-id]');
-        const subSerials = $row.data('subserials');
-
-        // Check if this is a multiple-entry row
-        const isMultiple = Array.isArray(subSerials) && subSerials.length > 1;
-
-        if (isMultiple) {
-            window.copyBLGroup = {
-                sr_no: $row.data('sr-no'),
-                subSerials: subSerials,
-                date: $row.data('date'),
-                supplier: $row.data('supplier')
-            };
-            $('#blCopySubSerialInput').val('');
-            $('#blCopySubEntryModal').modal('show');
-        } else {
-            // Handle normal (non-multiple) row copy
-            $('#blDate').val($row.data('date'));
-            $('#supplierName').val($row.data('supplier'));
-            $('#blDescription').val($row.attr('data-description') || '');
-            $('#blNoOfCtns').val($row.attr('data-no-of-ctns') || '');
-            $('#blUnitsPerCtn').val($row.attr('data-units-per-ctn') || '');
-            $('#blUnitPrice').val($row.attr('data-unit-price') || '');
-            $('#blWeight').val($row.attr('data-weight') || '');
-            $('#blShippingRate').val($row.attr('data-shipping-rate-per-kg') || '');
-
-            // Copy mode - show submit, hide save
-            $('#blSubmitBtn').removeClass('d-none');
-            $('#blSaveChangesBtn').addClass('d-none');
-            $('html, body').animate({ scrollTop: 0 }, 300);
-        }
-    });
-
-    $('#confirmBLSubSerialCopyBtn').on('click', function () {
-        const subSerial = parseInt($('#blCopySubSerialInput').val().trim());
-
-        if (!subSerial || !window.copyBLGroup) {
-            alert("Please enter a valid sub-serial number.");
-            return;
-        }
-
-        $.getJSON('/bl-client/data-all', function (fullData) {
-            const matchedRow = fullData.find(entry =>
-                entry.sr_no &&
-                entry.sub_serial &&
-                parseInt(entry.sr_no) === parseInt(copyBLGroup.sr_no) &&
-                parseInt(entry.sub_serial) === subSerial
-            );
-
-            if (!matchedRow) {
-                alert("Sub-serial not found.");
-                return;
-            }
-
-            // Populate form fields
-            $('html, body').animate({ scrollTop: 0 }, 300);
-            $('#blDate').val(matchedRow.date);
-            $('#supplierName').val(matchedRow.supplier_name);
-            $('#blDescription').val(matchedRow.description || '');
-            $('#blNoOfCtns').val(matchedRow.no_of_ctns || '');
-            $('#blUnitsPerCtn').val(matchedRow.units_per_ctn || '');
-            $('#blUnitPrice').val(matchedRow.unit_price || '');
-            $('#blWeight').val(matchedRow.weight || '');
-            $('#blShippingRate').val(matchedRow.shipping_rate_per_kg || '');
-
-            // Set to copy mode (submit not save)
-            $('#blSubmitBtn').removeClass('d-none');
-            $('#blSaveChangesBtn').addClass('d-none');
-
-            $('#blCopySubEntryModal').modal('hide');
-            $('#blCopySubSerialInput').val('');
-        });
-    });
-
-    $(function () {
-        $('[data-bs-toggle="tooltip"]').tooltip();
-    });
-}
-
-function loadBLClients() {
-    $.ajax({
-        url: '/bl-client/data',
-        type: 'GET',
-        success: function (data) {
-            if (!Array.isArray(data)) {
-                console.error('Invalid data format:', data);
-                alert('Invalid response from server.');
-                return;
-            }
-
-            data.sort((a, b) => a.sr_no - b.sr_no);
-
-            $('#bl-client-body').empty();
-            let totalMaterialSum = 0;
-            let totalShipmentSum = 0;
-            let grandTotalSum = 0;
-
-            data.forEach(item => {
-                totalMaterialSum += item.total_material_sum || 0;
-                totalShipmentSum += item.shipping_cost_sum || 0;
-                grandTotalSum = totalMaterialSum + totalShipmentSum;
-
-                const isMultipleEntry = item.sub_serials && item.sub_serials.length > 1;
-
-                const formatWithSubSerial = (combinedValue) => {
-                    if (!combinedValue) return '';
-                    const values = combinedValue.split('<br>');
-                    return values.join('<br>');
-                };
-
-                const $row = $('<tr></tr>').attr({
-                    'data-id': item.id,
-                    'data-date': item.date,
-                    'data-supplier': item.supplier_name,
-                    'data-sr-no': item.sr_no,
-                    'data-subserials': JSON.stringify(item.sub_serials || [])
-                });
-
-                if (isMultipleEntry) {
-                    $row.addClass('multi-entry-row');
-                } else {
-                    $row.attr({
-                        'data-description': item.description?.toString() || '',
-                        'data-no-of-ctns': item.no_of_ctns?.toString() || '',
-                        'data-units-per-ctn': item.units_per_ctn?.toString() || '',
-                        'data-unit-price': item.unit_price?.toString() || '',
-                        'data-weight': item.weight?.toString() || '',
-                        'data-shipping-rate-per-kg': item.shipping_rate_per_kg?.toString() || ''
-                    });
-                }
-
-                $row.append(`<td data-bs-toggle="tooltip" title="SR.NO">${item.sr_no}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Date">${formatBLDate(item.date)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Supplier Name">${item.supplier_name || ''}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Description">${formatWithSubSerial(item.description_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="No. of CTNS" class="format-aed">${formatWithSubSerial(item.no_of_ctns_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Units/CTN" class="format-aed">${formatWithSubSerial(item.units_per_ctn_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Unit Price" class="format-aed">${formatWithSubSerial(item.unit_price_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Total No. of Units" class="format-aed">${formatWithSubSerial(item.total_units_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Weight in KG" class="format-aed">${formatWithSubSerial(item.weight_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Total Material" class="format-aed">${formatWithSubSerial(item.total_material_combined)}</td>`);
-                if (isMultipleEntry) {
-                    $row.append(`<td data-bs-toggle="tooltip" title="Invoice Total Material" class="format-aed">AED ${Number(item.total_material_sum || 0).toFixed(2)}</td>`);
-                } else {
-                    $row.append(`<td></td>`);
-                }
-                $row.append(`<td data-bs-toggle="tooltip" title="Shipping Rate" class="format-aed">${formatWithSubSerial(item.shipping_rate_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="DGD" class="format-aed">${formatWithSubSerial(item.dgd_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Labeling Charges" class="format-aed">${formatWithSubSerial(item.labeling_charges_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Labour" class="format-aed">${formatWithSubSerial(item.labour_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Shipping Cost" class="format-aed">${formatWithSubSerial(item.shipping_cost_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Total" class="format-aed">${formatWithSubSerial(item.total_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Cost/Unit AED" class="format-aed">${formatWithSubSerial(item.cost_per_unit_aed_combined)}</td>`);
-                $row.append(`<td data-bs-toggle="tooltip" title="Cost/Unit USD" class="format-aed">${formatWithSubSerial(item.cost_per_unit_usd_combined)}</td>`);
-                $row.append(`
-                    <td>
-                        <button class="btn btn-sm btn-success edit-bl-btn" data-bs-toggle="tooltip" title="Edit"><i class="bi bi-pencil-square"></i></button>
-                        <button class="btn btn-sm btn-danger delete-bl-btn" data-id="${item.id}" data-bs-toggle="tooltip" title="Delete"><i class="bi bi-trash"></i></button>
-                        <button class="btn btn-sm btn-secondary copy-bl-btn" data-bs-toggle="tooltip" title="Copy"><i class="bi bi-files"></i></button>
-                    </td>
-                `);
-
-                $('#bl-client-body').append($row);
-            });
-            // Update the summary card with the calculated totals
-            $('#bl-total-material').text('AED ' + totalMaterialSum.toLocaleString(undefined, { minimumFractionDigits: 2 }));
-            $('#bl-total-shipment').text('AED ' + totalShipmentSum.toLocaleString(undefined, { minimumFractionDigits: 2 }));
-            $('#bl-grand-total').text('AED ' + grandTotalSum.toLocaleString(undefined, { minimumFractionDigits: 2 }));
-
-            applyNumberFormatting();
-
-            $('[data-bs-toggle="tooltip"]').tooltip();
-        },
-        error: function (xhr) {
-            console.error("Load BL Clients Error:", xhr.responseText);
-            alert("Failed to load BL client data.");
-        }
-    });
-}
-
-function formatBLDate(dateStr) {
-    if (!dateStr) return '';
-    const d = new Date(dateStr);
-    if (isNaN(d)) return '';
-
-    const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
-    return d.toLocaleDateString('en-GB', options);  // "Wednesday, 21 May 2025"
-}
-
-function exportBLExcel() {
-    const wb = XLSX.utils.book_new();
-    const wsData = [];
-
-    // Get headers (exclude the filter row)
-    const headers = [];
-    $('#sheet-bl table thead tr:eq(0) th').each(function (index) {
-        if (index < 19) headers.push($(this).text().trim());
-    });
-    wsData.push(headers);
-
-    $('#sheet-bl table tbody tr').each(function () {
-        const cells = $(this).find('td');
-        const allColumns = [];
-
-        cells.each(function (i) {
-            if (i < 19) {
-                const raw = $(this).html().trim().replace(/<br\s*\/?>/gi, '\n'); // convert line breaks to newline
-                const lines = raw.split('\n').map(v => v.trim()).filter(Boolean);
-
-                // Ensure at least 1 line exists for alignment
-                allColumns.push(lines.length ? lines : ['']);
-            }
-        });
-
-        const maxLines = Math.max(...allColumns.map(col => col.length));
-
-        for (let i = 0; i < maxLines; i++) {
-            const row = [];
-            allColumns.forEach(col => {
-                row.push(col[i] !== undefined ? col[i] : '');
-            });
-            wsData.push(row);
-        }
-    });
-
-    // Add summary
-    wsData.push([]);
-    wsData.push(['Total Material', $('#bl-total-material').text()]);
-    wsData.push(['Total Shipment', $('#bl-total-shipment').text()]);
-    wsData.push(['Grand Total', $('#bl-grand-total').text()]);
-
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-    // Apply wrap text to all cells
-    const range = XLSX.utils.decode_range(ws['!ref']);
-    for (let R = range.s.r; R <= range.e.r; ++R) {
-        for (let C = range.s.c; C <= range.e.c; ++C) {
-            const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
-            if (ws[cellRef]) {
-                if (!ws[cellRef].s) ws[cellRef].s = {};
-                ws[cellRef].s.alignment = { wrapText: true };
-            }
-        }
-    }
-
-    XLSX.utils.book_append_sheet(wb, ws, "BL Sheet");
-    XLSX.writeFile(wb, 'bl_sheet.xlsx');
-}
-
-function sendBLEntry() {
-    const form = $('#blClientForm')[0];
-    const formData = new FormData(form);
-
-    $.ajax({
-        url: '/bl-client/save',
-        method: 'POST',
-        data: formData,
-        contentType: false,
-        processData: false,
-        success: function (response) {
-            if (response.success) {
-                $('#blClientForm')[0].reset();
-                $('#blTotalUnitsHidden').val('');
-                loadBLClients();
-                window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-            } else {
-                alert('Save failed. Check response.');
-            }
-        },
-        error: function (xhr) {
-            alert('Error saving entry');
-            console.log(xhr.responseText);
-        }
-    });
-}
-
-function sendBLEntryEdit() {
-    console.log("editingBLId:", editingBLId);
-
-    if (editingBLId === null || isNaN(editingBLId)) {
-        alert("Missing record ID.");
-        return;
-    }
-
-    const noOfCtns = parseFloat($('#blNoOfCtns').val()) || 0;
-    const unitsPerCtn = parseFloat($('#blUnitsPerCtn').val()) || 0;
-    const manualTotalUnits = parseFloat($('#blTotalUnitsHidden').val()) || 0;
-
-    // Calculate total units
-    let totalUnits = 0;
-    if (noOfCtns > 0 && unitsPerCtn > 0) {
-        totalUnits = noOfCtns * unitsPerCtn;
-    } else if (manualTotalUnits > 0) {
-        totalUnits = manualTotalUnits;
-    } else {
-        // Save flag so we know we're editing
-        $('#blManualUnitsModal').data('source', 'edit');
-        $('#blManualUnitsModal').modal('show');
-        return;
-    }
-
-    const data = {
-        date: $('#blDate').val(),
-        supplier_name: $('#supplierName').val(),
-        description: $('#blDescription').val(),
-        no_of_ctns: noOfCtns,
-        units_per_ctn: unitsPerCtn,
-        unit_price: $('#blUnitPrice').val(),
-        weight: $('#blWeight').val(),
-        shipping_rate_per_kg: $('#blShippingRate').val(),
-        total_units: totalUnits,
-        _token: $('meta[name="csrf-token"]').attr('content')
-    };
-
-    const url = window.editingBLSubSerial
-        ? `/bl-client/update-subentry/${editingBLId}/${editingBLSubSerial}`
-        : `/bl-client/update/${editingBLId}`;
-
-    $.ajax({
-        url: url,
-        type: 'PUT',
-        data: data,
-        success: function () {
-            alert('Updated successfully!');
-            editingBLId = null;
-            editingBLSubSerial = null;
-            $('#blClientForm')[0].reset();
-            $('#blTotalUnitsHidden').val('');
-            $('#blSubmitBtn').removeClass('d-none');
-            $('#blSaveChangesBtn').addClass('d-none');
-            loadBLClients();
-            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-        },
-        error: function () {
-            alert('Update failed.');
-        }
-    });
-}
-
-// Local Sales Logic Initialization
-
-function initLocalLogic() {
-    let lsEntryCount = 0;
-    let lsCurrentStep = 0;
-    let lsFormData = [];
-    let pendingSingleFormData = {};
-
-    $('#ls-open-multi-entry-btn').on('click', function () {
-        $('#ls-number-of-entries').val('');
-        $('#ls-multi-entry-count-modal').modal('show');
-    });
-
-    $('#ls-start-entry-btn').on('click', function () {
-        lsEntryCount = parseInt($('#ls-number-of-entries').val()) || 0;
-        if (lsEntryCount <= 0) return alert('Please enter a valid number of entries');
-
-        lsFormData = Array.from({ length: lsEntryCount }, () => ({
-            client: $('#clientName').val(),
-            date: $('#localDate').val(),
-            description: '',
-            unit_price: '',
-            no_of_ctns: '',
-            units_per_ctn: '',
-            vat_percentage: '',
-            payment_status: '',
-            remarks: '',
-            total_no_of_units: ''
-        }));
-
-        lsCurrentStep = 0;
-        renderStepForm(lsCurrentStep);
-        $('#ls-multi-entry-count-modal').modal('hide');
-        $('#ls-multi-entry-step-modal').modal('show');
-    });
-
-    $('#ls-next-entry-btn').off('click').on('click', function () {
-        // Save current step inputs
-        saveCurrentStep(lsCurrentStep);
-
-        const entry = lsFormData[lsCurrentStep];
-        const ctns = parseInt(entry.no_of_ctns || 0);
-        const units = parseInt(entry.units_per_ctn || 0);
-        const manualUnits = parseInt($('#manualUnitsInput').val() || 0);
-
-        const isMissing = ctns <= 0 || units <= 0;
-
-        // If missing, check if manual input is visible
-        if (isMissing) {
-            $('#manualUnitsContainer').show();
-
-            if (manualUnits > 0) {
-                entry.total_no_of_units = manualUnits;
-                $('#manualUnitsError').hide();
-            } else {
-                $('#manualUnitsError').show();
-                return;
-            }
-        } else {
-            $('#manualUnitsContainer').hide();
-            entry.total_no_of_units = ctns * units;
-        }
-
-        // VAT & Totals
-        const unitPrice = parseFloat(entry.unit_price || 0);
-        const amountNoVat = unitPrice * entry.total_no_of_units;
-        const vatAmount = amountNoVat * (parseFloat(entry.vat_percentage || 0) / 100);
-        entry.total_amount_without_vat = amountNoVat;
-        entry.vat_amount = vatAmount;
-        entry.total_amount_including_vat = amountNoVat + vatAmount;
-
-        // Next step or show submit
-        if (lsCurrentStep < lsEntryCount - 1) {
-            lsCurrentStep++;
-            renderStepForm(lsCurrentStep);
-        } else {
-            $('#ls-next-entry-btn').hide();
-            $('#ls-submit-multi-entry').removeClass('d-none');
-        }
-    });
-
-    $('#ls-prev-entry-btn').on('click', function () {
-        lsCurrentStep--;
-
-        $('#ls-submit-multi-entry').addClass('d-none');
-        $('#ls-next-entry-btn').removeClass('d-none');
-
-        renderStepForm(lsCurrentStep);
-    });
-
-    $('#ls-manual-units-form').on('submit', function (e) {
-        e.preventDefault();
-        const raw = $('#ls-manual-total-units').val().trim();
-        const val = parseFloat(raw);
-
-        if (isNaN(val) || val <= 0) {
-            alert('Please enter a valid number greater than 0.');
-            return;
-        }
-
-        lsFormData[lsCurrentStep].total_no_of_units = val;
-
-        $('#ls-manual-units-modal').modal('hide');
-        $('#ls-manual-units-modal').one('hidden.bs.modal', proceedToNextStep);
-    });
-
-    $('#ls-submit-multi-entry').on('click', function () {
-        saveCurrentStep(lsCurrentStep);
-
-        for (let i = 0; i < lsFormData.length; i++) {
-            const entry = lsFormData[i];
-            const ctns = parseInt(entry.no_of_ctns || 0);
-            const units = parseInt(entry.units_per_ctn || 0);
-
-            // If both values are present, calculate total units
-            if (ctns > 0 && units > 0) {
-                entry.total_no_of_units = ctns * units;
-            }
-
-            // If total units still missing, show modal or alert
-            if (!entry.total_no_of_units || entry.total_no_of_units <= 0) {
-                if (i === lsFormData.length - 1) {
-                    // Last step — show manual input instead of alert
-                    $('#manualUnitsContainer').show();
-                    $('#manualUnitsInput').focus();
-
-                    $('#manualUnitsInput').off('input').on('input', function () {
-                        const val = parseInt($(this).val());
-                        if (val > 0) {
-                            $('#manualUnitsError').hide();
-                            lsFormData[i].total_no_of_units = val;
-
-                            // Optional: Recalculate totals
-                            const unitPrice = parseFloat(entry.unit_price || 0);
-                            const amountNoVat = unitPrice * val;
-                            const vatAmount = amountNoVat * (parseFloat(entry.vat_percentage || 0) / 100);
-                            entry.total_amount_without_vat = amountNoVat;
-                            entry.vat_amount = vatAmount;
-                            entry.total_amount_including_vat = amountNoVat + vatAmount;
-                        } else {
-                            $('#manualUnitsError').show();
-                        }
-                    });
-
-                    return;
-                } else {
-                    alert(`Step ${i + 1}: Total units missing. Please complete the step.`);
-                    return;
-                }
-            }
-
-            // Optional: Calculate VAT and totals if needed here
-            const unitPrice = parseFloat(entry.unit_price || 0);
-            const amountNoVat = unitPrice * entry.total_no_of_units;
-            const vatAmount = amountNoVat * (parseFloat(entry.vat_percentage || 0) / 100);
-            entry.total_amount_without_vat = amountNoVat;
-            entry.vat_amount = vatAmount;
-            entry.total_amount_including_vat = amountNoVat + vatAmount;
-        }
-
-        console.log("Saving multiple entries: ", lsFormData);
-
-        // Send actual data array with correct key
-        $.ajax({
-            url: '/local-sales/store-multiple',
-            type: 'POST',
-            data: {
-                _token: $('meta[name="csrf-token"]').val(),
-                entries: lsFormData // Use correct key to match controller
-            },
-            success: function (res) {
-                if (res.success) {
-                    alert('Multiple entries saved successfully!');
-                    $('#ls-multi-entry-step-modal').modal('hide');
-                    $('#localSalesForm')[0].reset();
-                    loadLocalSales();
-                } else {
-                    alert('Failed to save multiple entries.');
-                }
-            },
-            error: function () {
-                alert('Server error while saving multiple entries.');
-            }
-        });
-    });
-
-    $('#localSalesForm').off('submit').on('submit', function (e) {
-        e.preventDefault();
-
-        const formData = {
-            _token: $('meta[name="csrf-token"]').val(),
-            client: $('#clientName').val(),
-            date: $('#localDate').val(),
-            description: $('#ls-description').val(),
-            unit_price: parseFloat($('#ls-unit-price').val()) || 0,
-            no_of_ctns: parseFloat($('#noOfCtns').val()) || 0,
-            units_per_ctn: parseFloat($('#ls-units-per-ctn').val()) || 0,
-            vat_percentage: parseFloat($('#vatPercent').val()) || 0,
-            payment_status: $('#paymentStatus').val(),
-            remarks: $('#ls-remarks').val(),
-        };
-
-        const totalUnits = formData.no_of_ctns * formData.units_per_ctn;
-
-        if (totalUnits > 0) {
-            formData.total_no_of_units = totalUnits;
-            const amountNoVat = formData.unit_price * totalUnits;
-            const vatAmount = amountNoVat * (formData.vat_percentage / 100);
-            formData.total_amount_without_vat = amountNoVat;
-            formData.vat_amount = vatAmount;
-            formData.total_amount_including_vat = amountNoVat + vatAmount;
-
-            submitSingleEntry(formData);
-        } else {
-            // Show manual modal and defer submit
-            pendingSingleFormData = formData;
-            $('#manualTotalUnits').val('');
-            $('#lsManualUnitsModal').modal('show');
-        }
-    });
-
-    $('#manualUnitsForm').on('submit', function (e) {
-        e.preventDefault();
-
-        const raw = $('#manualTotalUnits').val().trim();
-        const val = parseFloat(raw);
-
-        if (isNaN(val) || val <= 0) {
-            alert('Please enter a valid number greater than 0.');
-            return;
-        }
-
-        // Ensure global form data exists
-        if (typeof pendingSingleFormData !== 'undefined') {
-            pendingSingleFormData.total_no_of_units = val;
-
-            const unitPrice = parseFloat(pendingSingleFormData.unit_price) || 0;
-            const vatPercent = parseFloat(pendingSingleFormData.vat_percentage) || 0;
-
-            const amountNoVat = unitPrice * val;
-            const vatAmount = amountNoVat * (vatPercent / 100);
-            const totalWithVat = amountNoVat + vatAmount;
-
-            pendingSingleFormData.total_amount_without_vat = amountNoVat;
-            pendingSingleFormData.vat_amount = vatAmount;
-            pendingSingleFormData.total_amount_including_vat = totalWithVat;
-        }
-
-        $('#lsManualUnitsModal').modal('hide');
-        $('#lsManualUnitsModal').one('hidden.bs.modal', function () {
-            submitSingleEntry(pendingSingleFormData);
-        });
-    });
-
-    function submitSingleEntry(formData) {
-        const isUpdate = !!formData.id; // Check if it's update
-        const url = isUpdate ? '/local-sales/update/' + formData.id : '/local-sales/save';
-
-        $.post(url, formData, function (res) {
-            if (res.success) {
-                alert(isUpdate ? 'Entry updated!' : 'Entry saved!');
-                $('#localSalesForm')[0].reset();
-                $('#localUpdateBtn').addClass('d-none');
-                $('#localSubmitBtn').removeClass('d-none');
-                loadLocalSales();
-                scrollToBottomTable();
-            } else {
-                alert('Failed to ' + (isUpdate ? 'update' : 'save') + '.');
-            }
-        }).fail(() => alert('Server error while ' + (isUpdate ? 'updating' : 'saving') + '.'));
-    }
-
-    function proceedToNextStep() {
-        lsCurrentStep++;
-
-        if (lsCurrentStep === lsEntryCount) {
-            $('#ls-next-entry-btn').addClass('d-none');
-            $('#ls-submit-multi-entry').removeClass('d-none');
-        } else {
-            renderStepForm(lsCurrentStep);
-        }
-    }
-
-    function renderStepForm(index) {
-        const e = lsFormData[index];
-
-        $('#ls-step-entry-fields').html(`
-        <div class="row g-3">
-            <div class="col-md-4">
-                <input type="text" class="form-control" id="ls-description-${index}" placeholder="Description" value="${e.description}">
-            </div>
-            <div class="col-md-2">
-                <input type="number" class="form-control" id="ls-unit-price-${index}" placeholder="Unit Price" value="${e.unit_price}">
-            </div>
-            <div class="col-md-2">
-                <input type="number" class="form-control" id="ls-no-of-ctns-${index}" placeholder="No. of CTNS" value="${e.no_of_ctns}">
-            </div>
-            <div class="col-md-2">
-                <input type="number" class="form-control" id="ls-units-per-ctn-${index}" placeholder="Units/CTN" value="${e.units_per_ctn}">
-            </div>
-            <div class="col-md-2">
-                <input type="number" class="form-control" id="ls-vat-percent-${index}" placeholder="VAT %" value="${e.vat_percentage}">
-            </div>
-            <div class="col-md-4">
-                <select class="form-select" id="ls-payment-status-${index}">
-                    <option disabled ${!e.payment_status ? 'selected' : ''}>Payment Status</option>
-                    <option ${e.payment_status === 'Paid' ? 'selected' : ''}>Paid</option>
-                    <option ${e.payment_status === 'Pending' ? 'selected' : ''}>Pending</option>
-                    <option ${e.payment_status === 'Partially Paid' ? 'selected' : ''}>Partially Paid</option>
-                </select>
-            </div>
-            <div class="col-md-8">
-                <input type="text" class="form-control" id="ls-remarks-${index}" placeholder="Remarks" value="${e.remarks}">
-            </div>
-
-            <!-- 🔽 Add Manual Total Units -->
-            <div id="manualUnitsContainer" class="col-md-12" style="display: none;">
-                <label for="manualUnitsInput" class="form-label">Enter Total Units Manually</label>
-                <input type="number" id="manualUnitsInput" class="form-control" placeholder="e.g. 100">
-                <div class="text-danger mt-1" id="manualUnitsError" style="display: none;">Please enter a valid total units value.</div>
-            </div>
-        </div>
+    const esc = (s = '') => String(s).replace(/</g, '&lt;');
+    const fmtAED = n => 'AED ' + (parseFloat(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2 });
+
+    let grandInc = 0;
+
+    // Do NOT sort; respect backend order (id ASC)
+    rows.forEach((r, i) => {
+        const id = r.id;
+        const ymd = (r.date || '').slice(0, 10);         // "YYYY-MM-DD"
+        const dateUi = formatSheetDateUTC(ymd);             // e.g., "Thursday 10 April 2025"
+        const client = esc(r.client || '');
+        const brief = esc(r.description || '');
+        const pstat = (r.payment_status || 'pending').toLowerCase();
+        const rem = esc(r.remarks || '');
+
+        // Use backend aggregate directly
+        const rowInc = Number(r.total_inc_vat) || 0;
+        grandInc += rowInc;
+
+        // If items are present inline, render them; else lazy-load placeholder
+        let itemRowsHtml = `<tr class="ls-items-placeholder">
+        <td colspan="9" class="p-3 text-sm text-gray-500">Expand to load items…</td>
+      </tr>`;
+        if (Array.isArray(r.items)) {
+            itemRowsHtml = buildEditableItemRowsHtml(r.items, pstat);
+        }
+
+        // MASTER row
+        const $master = $(`
+      <tr class="group hover:bg-gray-50 master-row" data-id="${id}" data-date="${ymd}">
+        <td class="px-3 py-2 align-top">${i + 1}</td>
+        <td class="px-3 py-2 align-top">${dateUi}</td>
+        <td class="px-3 py-2 align-top">${client}</td>
+        <td class="px-3 py-2 align-top">${brief}</td>
+        <td class="px-3 py-2 align-top text-right font-semibold ls-total-cell">${fmtAED(rowInc)}</td>
+        <td class="px-3 py-2 align-top text-center actions-cell">
+          <div class="flex items-center justify-center gap-2">
+            <button class="row-save px-2 py-1 text-sm rounded bg-green-600 hover:bg-green-700 text-white mr-2 hidden"
+                    data-tippy-content="Save changes"><i class="bi bi-check2-circle"></i></button>
+
+            <button class="ls-upload px-2 py-1 text-sm rounded bg-blue-500 hover:bg-blue-600 text-white"
+                    data-id="${id}" data-tippy-content="Upload"><i class="bi-cloud-arrow-up-fill"></i></button>
+
+            <button class="ls-view px-2 py-1 text-sm rounded bg-slate-700 hover:bg-slate-800 text-white"
+                    data-id="${id}" data-tippy-content="View"><i class="bi bi-paperclip"></i></button>
+
+            <button class="local-delete px-2 py-1 text-sm rounded bg-red-600 hover:bg-red-700 text-white"
+                    data-id="${id}" data-tippy-content="Delete"><i class="bi bi-trash-fill"></i></button>
+          </div>
+        </td>
+      </tr>
     `);
 
-        $('#ls-step-title').text(`(${index + 1} of ${lsEntryCount})`);
-        $('#ls-prev-entry-btn').toggle(index > 0);
+        // DETAIL row
+        const $detail = $(`
+      <tr class="detail-row" data-parent="${id}">
+        <td colspan="6" class="pt-2 pb-4 bg-transparent">
+          <div class="ls-detail-wrapper overflow-hidden rounded-2xl border border-gray-200 shadow-sm">
+            <div class="px-4 py-2 bg-[#d7efff] border-b text-xs font-semibold text-gray-700 uppercase tracking-wider">Items</div>
+            <table class="w-full text-sm">
+              <thead class="text-gray-600">
+                <tr>
+                  <th class="px-4 py-3 text-left w-12">#</th>
+                  <th class="px-4 py-3 text-left min-w-[18rem]">Description</th>
+                  <th class="px-4 py-3 text-right w-28">No. of Units</th>
+                  <th class="px-4 py-3 text-right w-28">Unit Price</th>
+                  <th class="px-4 py-3 text-right w-36">Total w/o VAT</th>
+                  <th class="px-4 py-3 text-right w-28">VAT</th>
+                  <th class="px-4 py-3 text-right w-36">Total w/ VAT</th>
+                  <th class="px-4 py-3 text-center w-40">Payment</th>
+                  <th class="px-4 py-3 text-left min-w-[18rem]">Remarks</th>
+                </tr>
+              </thead>
+              <tbody class="ls-items-body divide-y divide-gray-100">
+                ${itemRowsHtml}
+              </tbody>
+            </table>
+            <div class="p-3">
+              <button class="add-item-btn mt-1 px-3 py-1 bg-blue-800 text-white rounded hover:bg-blue-900" data-target="${id}">+ Add Item</button>
+            </div>
+          </div>
+        </td>
+      </tr>
+    `).addClass('hidden'); // collapsed by default
 
-        // 🔁 Show Next or Submit depending on last step
-        if (index < lsEntryCount - 1) {
-            $('#ls-next-entry-btn').show();
-            $('#ls-submit-multi-entry').addClass('d-none');
-        } else {
-            $('#ls-next-entry-btn').hide();
-            $('#ls-submit-multi-entry').removeClass('d-none');
-        }
+        $body.append($master, $detail);
 
-        // Reset manual input area visibility each step
-        $('#manualUnitsContainer').hide();
-        $('#manualUnitsInput').val('');
-        $('#manualUnitsError').hide();
-    }
-
-    function saveCurrentStep(index) {
-        const e = lsFormData[index];
-        e.description = $(`#ls-description-${index}`).val();
-        e.unit_price = $(`#ls-unit-price-${index}`).val();
-        e.no_of_ctns = $(`#ls-no-of-ctns-${index}`).val();
-        e.units_per_ctn = $(`#ls-units-per-ctn-${index}`).val();
-        e.vat_percentage = $(`#ls-vat-percent-${index}`).val();
-        e.payment_status = $(`#ls-payment-status-${index}`).val();
-        e.remarks = $(`#ls-remarks-${index}`).val();
-    }
-
-    $('#lsConfirmDeleteBtn').off('click').on('click', function () {
-        let subSerial = lsDeleteSubSerial;
-
-        if (subSerial !== null) {
-            const input = $('#lsSubSerialInput').val().trim().toLowerCase();
-            if (!input) return alert('Please enter a sub-serial number or "all"');
-
-            if (input === 'all') {
-                subSerial = 'all';
-            } else if (!/^\d+$/.test(input)) {
-                return alert('Invalid sub-serial number.');
-            } else {
-                subSerial = parseInt(input);
-            }
-        }
-
-        $.post('/local-sales/delete', {
-            _token: $('meta[name="csrf-token"]').val(),
-            sr_no: lsDeleteSrNo,
-            sub_serial: subSerial
-        }, function (res) {
-            if (res.success) {
-                $('#lsDeleteModal').modal('hide');
-                loadLocalSales();
-            } else {
-                alert('Failed to delete.');
-            }
-        });
+        // Baselines & UI inits
+        setItemsBaseline($detail, getItemsFromDetail($detail));
+        updateRowDirtyUI($detail);
+        $detail.find('.auto-grow').each(function () { autosizeTextarea(this); });
+        refreshSerialVisibility($detail);
+        autoGrowTextareas($detail);
     });
 
-    $('#localUpdateBtn').on('click', function () {
-        const id = $(this).data('update-id');
+    // Totals / counts
+    $('#localTotalSales').text(fmtAED(grandInc));
+    $('#localTotalCount').text(`${rows.length} record${rows.length === 1 ? '' : 's'}`);
 
-        const noCtnsRaw = $('#noOfCtns').val();
-        const unitsPerCtnRaw = $('#ls-units-per-ctn').val();
+    initTippy();
+}
 
-        let noCtns = parseInt(noCtnsRaw);
-        let unitsPerCtn = parseInt(unitsPerCtnRaw);
-        let totalUnits;
+// ---------- Local Sales: expand/collapse, modal, CRUD ----------
+function initLocalLogic() {
+    // toggle detail
+    $(document)
+        .off('click.lsRowToggle')
+        .on('click.lsRowToggle', '#localSalesBody > tr:not(.detail-row)', function (e) {
+            if ($(e.target).closest('.actions-cell,button,a,.bi,input,select,textarea,label').length) return;
 
-        if ((noCtnsRaw === '' || parseInt(noCtnsRaw) === 0) &&
-            (unitsPerCtnRaw === '' || parseInt(unitsPerCtnRaw) === 0)) {
+            const id = $(this).data('id');
+            const $detail = $(`tr.detail-row[data-parent="${id}"], tr.detail-row[data-id="${id}"]`);
+            const wasHidden = $detail.hasClass('hidden');
 
-            // Prepare global formData for modal usage
-            pendingSingleFormData = {
-                id: id, // Required for update
-                client: $('#clientName').val(),
-                date: $('#localDate').val(),
-                description: $('#ls-description').val(),
-                unit_price: parseFloat($('#ls-unit-price').val()) || 0,
-                no_of_ctns: 0,
-                units_per_ctn: 0,
-                vat_percentage: parseFloat($('#vatPercent').val()) || 0,
-                payment_status: $('#paymentStatus').val(),
-                remarks: $('#ls-remarks').val()
-            };
+            // close all details first
+            $('#localSalesBody tr.detail-row').addClass('hidden');
 
-            $('#lsManualUnitsModal').modal('show');
-            return;
-        }
-
-        // Calculate if CTNS + Units/CTN are available
-        noCtns = noCtns || 0;
-        unitsPerCtn = unitsPerCtn || 0;
-        totalUnits = noCtns * unitsPerCtn;
-
-        const unitPrice = parseFloat($('#ls-unit-price').val()) || 0;
-        const vat = parseFloat($('#vatPercent').val()) || 0;
-        const amount = unitPrice * totalUnits;
-        const vatAmount = amount * (vat / 100);
-        const totalWithVat = amount + vatAmount;
-
-        const payload = {
-            _token: $('meta[name="csrf-token"]').val(),
-            client: $('#clientName').val(),
-            date: $('#localDate').val(),
-            description: $('#ls-description').val(),
-            unit_price: unitPrice,
-            no_of_ctns: noCtns,
-            units_per_ctn: unitsPerCtn,
-            total_no_of_units: totalUnits,
-            total_amount_without_vat: amount,
-            vat_percentage: vat,
-            vat_amount: vatAmount,
-            total_amount_including_vat: totalWithVat,
-            payment_status: $('#paymentStatus').val(),
-            remarks: $('#ls-remarks').val()
-        };
-
-        $.post('/local-sales/update/' + id, payload, function (res) {
-            if (res.success) {
-                alert('Entry updated!');
-                $('#localUpdateBtn').addClass('d-none');
-                $('#localSubmitBtn').removeClass('d-none');
-                $('#localSalesForm')[0].reset();
-                loadLocalSales();
-                scrollToBottomTable();
-            } else {
-                alert('Failed to update!');
-            }
-        }).fail(() => alert('Server error while updating.'));
-    });
-
-    $('#confirmSubSerialBtn').on('click', function () {
-        const subSerial = parseInt($('#subSerialInput').val().trim());
-        const actionType = $(this).data('action-type'); // 'edit' or 'copy'
-        const sr_no = $(this).data('sr-no');
-
-        // Get max sub-serial from group
-        const group = window.localSalesData.find(g => g.sr_no == sr_no);
-        const maxSubSerial = group ? group.entries.length : 0;
-
-        if (isNaN(subSerial) || subSerial < 1 || subSerial > maxSubSerial) {
-            alert(`Please enter a valid sub-serial number between 1 and ${maxSubSerial}.`);
-            return;
-        }
-
-        $('#subSerialModal').modal('hide');
-
-        if (actionType === 'edit') {
-            editEntry(sr_no, subSerial);
-        } else if (actionType === 'copy') {
-            copyEntry(sr_no, subSerial);
-        }
-    });
-
-    $('#confirmSubSerialCopyBtn').on('click', function () {
-        const sr_no = $('#targetSrNoForCopy').val();
-        const sub_serial = parseInt($('#subSerialInputForCopy').val());
-
-        const group = window.localSalesData.find(g => g.sr_no == sr_no);
-        if (!group) return alert('Group not found.');
-
-        if (!sub_serial || sub_serial < 1 || sub_serial > group.entries.length) {
-            alert(`Please enter a valid sub-serial number between 1 and ${group.entries.length}.`);
-            return;
-        }
-
-        const target = group.entries.find(e => e.sub_serial == sub_serial);
-        if (!target) {
-            alert('Entry not found.');
-            return;
-        }
-
-        $('#subSerialCopyModal').modal('hide');
-        prefillLocalCopyForm(target);
-    });
-
-    // Open the date popup
-    $('#localDateFilterInput').on('click', function () {
-        const popup = $('#localDatePopup');
-        const trigger = $(this);
-        const popupHeight = popup.outerHeight();
-        const offset = trigger.offset();
-        const scrollTop = $(window).scrollTop();
-        const windowHeight = $(window).height();
-
-        let topPosition = offset.top + trigger.outerHeight() + 8;
-        if ((topPosition - scrollTop + popupHeight) > windowHeight) {
-            topPosition = offset.top - popupHeight - 10;
-        }
-
-        popup.css({
-            top: topPosition,
-            left: offset.left
-        }).fadeIn();
-    });
-
-    // Close popup when clicked outside
-    $(document).on('click', function (e) {
-        if (!$(e.target).closest('#localDateFilterInput, #localDatePopup').length) {
-            $('#localDatePopup').fadeOut();
-        }
-    });
-
-    // Apply date filter
-    $('#applyLocalDateFilter').on('click', function () {
-        const fromDate = $('#localFromDate').val();
-        const toDate = $('#localToDate').val();
-
-        if (!fromDate || !toDate) {
-            alert('Please select both From and To dates.');
-            return;
-        }
-
-        const formatDate = d => {
-            const parts = d.split("-");
-            return `${parts[2]}-${parts[1]}-${parts[0]}`;
-        };
-
-        $('#localDateFilterInput').val(`${formatDate(fromDate)} to ${formatDate(toDate)}`);
-        $('#localDatePopup').fadeOut();
-
-        $('#localSalesTableBody tr').each(function () {
-            const cell = $(this).find('td:eq(2)');
-            const rowDate = cell.data('date');
-
-            if (rowDate >= fromDate && rowDate <= toDate) {
-                $(this).show();
-            } else {
-                $(this).hide();
-            }
-        });
-
-        const totalRows = $('#localSalesTableBody tr').length;
-        const visibleRows = $('#localSalesTableBody tr:visible').length;
-        if (visibleRows > 0 && visibleRows < totalRows) {
-            $('#localFilteredExcelBtn').removeClass('d-none');
-        } else {
-            $('#localFilteredExcelBtn').addClass('d-none');
-        }
-    });
-
-    // Clear date filter
-    $('#clearLocalDateFilter').on('click', function () {
-        $('#localFromDate').val('');
-        $('#localToDate').val('');
-        $('#localDateFilterInput').val('');
-        $('#localDatePopup').fadeOut();
-        $('#localSalesTableBody tr').show();
-        $('#localFilteredExcelBtn').addClass('d-none');
-    });
-
-    // Export filtered Excel
-    $('#localFilteredExcelBtn').on('click', function () {
-        const wb = XLSX.utils.book_new();
-        const wsData = [];
-
-        // Headers
-        const headers = [];
-        $('#local-export-table thead tr:eq(0) th').each(function (index) {
-            if (index < 13) { // Exclude ACTION if needed
-                headers.push($(this).text().trim());
-            }
-        });
-        wsData.push(headers);
-
-        // Rows
-        $('#localSalesTableBody tr:visible').each(function () {
-            const rowData = [];
-            $(this).find('td').each(function (i) {
-                if (i < 13) {
-                    rowData.push($(this).text().trim());
+            if (wasHidden) {
+                // if already rendered with inputs (draft or previously loaded), just show
+                if ($detail.find('.ls-items-body :input').length) {
+                    $detail.removeClass('hidden');
+                    return;
                 }
-            });
-            wsData.push(rowData);
-        });
-
-        const ws = XLSX.utils.aoa_to_sheet(wsData);
-        XLSX.utils.book_append_sheet(wb, ws, "Local Sales");
-        XLSX.writeFile(wb, 'filtered_local_sales.xlsx');
-    });
-
-}
-
-function formatDateLong(dateStr) {
-    if (!dateStr) return '';
-    const date = new Date(dateStr);
-    const day = date.toLocaleDateString('en-US', { weekday: 'long' });
-    const dayNum = date.getDate().toString().padStart(2, '0');
-    const month = date.toLocaleDateString('en-US', { month: 'long' });
-    const year = date.getFullYear();
-    return `${day}, ${dayNum} ${month} ${year}`;
-}
-
-// Load and render table
-function loadLocalSales() {
-    $.get('/local-sales/data', function (res) {
-        // Save data globally for edit/delete logic
-        window.localSalesData = res.entries;
-
-        let html = '';
-        let total = 0;
-
-        res.entries.forEach((group) => {
-            const entries = group.entries;
-
-            if (entries.length === 1) {
-                const e = entries[0];
-                html += `
-                    <tr>
-                        <td data-bs-toggle="tooltip" title="SR.NO">${e.sr_no}</td>
-                        <td data-bs-toggle="tooltip" title="Client">${e.client || ''}</td>
-                        <td data-bs-toggle="tooltip" title="Date" data-date="${e.date || ''}">${formatDateLong(e.date)}</td>
-                        <td data-bs-toggle="tooltip" title="Description">${e.description || ''}</td>
-                        <td data-bs-toggle="tooltip" title="Unit Price" class="format-aed">AED ${parseFloat(e.unit_price || 0).toFixed(2)}</td>
-                        <td data-bs-toggle="tooltip" title="No. of CTNS" class="format-aed">${e.no_of_ctns || '-'}</td>
-                        <td data-bs-toggle="tooltip" title="Units/CTN" class="format-aed">${e.units_per_ctn || '-'}</td>
-                        <td data-bs-toggle="tooltip" title="Total Units" class="format-aed">${e.total_no_of_units || '-'}</td>
-                        <td data-bs-toggle="tooltip" title="Amount No VAT" class="format-aed">AED ${parseFloat(e.total_amount_without_vat || 0).toFixed(2)}</td>
-                        <td data-bs-toggle="tooltip" title="VAT" class="format-aed">AED ${parseFloat(e.vat_amount || 0).toFixed(2)}</td>
-                        <td data-bs-toggle="tooltip" title="Total With VAT" class="format-aed">AED ${parseFloat(e.total_amount_including_vat || 0).toFixed(2)}</td>
-                        <td data-bs-toggle="tooltip" title="Payment">${e.payment_status || ''}</td>
-                        <td data-bs-toggle="tooltip" title="Remarks" class="format-aed">${e.remarks || ''}</td>
-                        <td class="text-nowrap">
-                            <div class="d-flex align-items-center">
-                                <button class="btn btn-danger btn-sm me-1" data-bs-toggle="tooltip" title="Delete" onclick="confirmLocalDelete(${e.sr_no}, null)">
-                                    <i class="bi bi-trash"></i>
-                                </button>
-                                <button class="btn btn-success btn-sm me-1" data-bs-toggle="tooltip" title="Edit" onclick="editEntry(${e.sr_no})">
-                                    <i class="bi bi-pencil-square"></i>
-                                </button>
-                                <button class="btn btn-secondary btn-sm" data-bs-toggle="tooltip" title="Copy" onclick="copyEntry(${e.sr_no})">
-                                    <i class="bi bi-files"></i>
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-                `;
-                total += parseFloat(e.total_amount_including_vat || 0);
-
-            } else {
-                const combine = (field, prefix = '', suffix = '') =>
-                    entries.map(e => `${e.sub_serial}. ${prefix}${field === 'date' ? formatDateLong(e[field]) : (e[field] || '-')}${suffix}`).join('<br>');
-
-                const e0 = entries[0];
-                html += `
-                    <tr>
-                        <td data-bs-toggle="tooltip" title="SR.NO">${e0.sr_no}</td>
-                        <td data-bs-toggle="tooltip" title="client">${e0.client || ''}</td>
-                        <td data-bs-toggle="tooltip" title="Date" data-date="${e0.date || ''}">${formatDateLong(e0.date)}</td>
-                        <td data-bs-toggle="tooltip" title="Description">${combine('description')}</td>
-                        <td data-bs-toggle="tooltip" title="Unit Price" class="format-aed">${combine('unit_price', 'AED ')}</td>
-                        <td data-bs-toggle="tooltip" title="No. of CTNS" class="format-aed">${combine('no_of_ctns')}</td>
-                        <td data-bs-toggle="tooltip" title="Units/CTN" class="format-aed">${combine('units_per_ctn')}</td>
-                        <td data-bs-toggle="tooltip" title="Total Units" class="format-aed">${combine('total_no_of_units')}</td>
-                        <td data-bs-toggle="tooltip" title="Amount No VAT" class="format-aed">${combine('total_amount_without_vat', 'AED ')}</td>
-                        <td data-bs-toggle="tooltip" title="VAT" class="format-aed">${combine('vat_amount', 'AED ')}</td>
-                        <td data-bs-toggle="tooltip" title="Total With VAT" class="format-aed">${combine('total_amount_including_vat', 'AED ')}</td>
-                        <td data-bs-toggle="tooltip" title="Payment">${combine('payment_status')}</td>
-                        <td data-bs-toggle="tooltip" title="Remarks" class="format-aed">${combine('remarks')}</td>
-                        <td class="text-nowrap">
-                            <div class="d-flex align-items-center">
-                                <button class="btn btn-danger btn-sm me-1" data-bs-toggle="tooltip" title="Delete" onclick="confirmLocalDelete(${entries[0].sr_no}, 'multi')">
-                                    <i class="bi bi-trash"></i>
-                                </button>
-                                <button class="btn btn-success btn-sm me-1" data-bs-toggle="tooltip" title="Edit" onclick="editEntry(${entries[0].sr_no})">
-                                    <i class="bi bi-pencil-square"></i>
-                                </button>
-                                <button class="btn btn-secondary btn-sm" data-bs-toggle="tooltip" title="Copy" onclick="copyEntry(${entries[0].sr_no})">
-                                    <i class="bi bi-files"></i>
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-                `;
-
-                // Add up total for each sub-entry
-                entries.forEach(e => {
-                    total += parseFloat(e.total_amount_including_vat || 0);
+                // first open → lazy load items (persisted rows)
+                loadLocalItemsOnce($detail, id).always(() => {
+                    $detail.removeClass('hidden');
+                    autoGrowTextareas($detail);
+                    updateRowDirtyUI($detail);
                 });
             }
         });
 
+    // open Quick-add modal
+    $(document).off('click.lsAdd').on('click.lsAdd', '#localAddBtn', function () {
+        $('#qDate').val('');
+        $('#qClient').val('');
+        $('#qDesc').val('');
+        $('#localModal').removeClass('hidden').addClass('flex');
+    });
 
-        $('#localSalesTableBody').html(html);
-        $('#totalSalesValue').text('AED ' + total.toLocaleString(undefined, { minimumFractionDigits: 2 }));
+    // close quick modal
+    $(document).off('click.lsClose').on('click.lsClose', '#closeLocalModal,#cancelLocal', function () {
+        $('#localModal').addClass('hidden').removeClass('flex');
+    });
 
-        applyNumberFormatting();
+    $(document).off('submit.lsQuick').on('submit.lsQuick', '#localQuickForm', function (e) {
+        e.preventDefault();
+        const ymd = ($('#qDate').val() || '').trim();
+        const dateUi = formatSheetDateUTC(ymd);
+        const client = $('#qClient').val();
+        const desc = $('#qDesc').val();
 
-        const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-        tooltipTriggerList.forEach(function (tooltipTriggerEl) {
-            new bootstrap.Tooltip(tooltipTriggerEl);
+        $('#localModal').addClass('hidden').removeClass('flex');
+
+        const draftId = 'draft-' + Date.now();
+        // drop the "No rows yet." placeholder if present
+        $('#localSalesBody .ls-empty').remove();
+        // count only master rows (exclude detail rows and placeholder)
+        const idx = $('#localSalesBody > tr').not('.detail-row,.ls-empty').length + 1;
+
+        const [$m, $d] = buildLocalDraftRow({ id: draftId, idx, date: dateUi, client, desc });
+        $m.attr('data-date', ymd);
+        $('#localSalesBody').append($m).append($d);
+        $d.removeClass('hidden');
+
+        // start with one item; prefill description from header "Brief Description"
+        const $first = addLocalItemRow($d);
+        $first.find('.li-desc').val(desc);
+        refreshSerialVisibility($d);
+        // initial totals
+        recalcItemTable($d);
+        initTippy();
+    });
+
+    // discard draft
+    $(document).off('click.lsDraftCancel').on('click.lsDraftCancel', '.draft-cancel', function () {
+        const $m = $(this).closest('tr[data-draft="1"]');
+        const id = $m.data('id');
+
+        // remove the matching detail (covers draft + non-draft patterns)
+        $(`tr.detail-row[data-parent="${id}"], tr.detail-row[data-id="${id}"]`).remove();
+        $m.remove();
+
+        // optional: clear any cached items for this id
+        if (window.localItemsCache) delete window.localItemsCache[id];
+
+        // reindex S.No (first cell)
+        $('#localSalesBody > tr').not('.detail-row,.ls-empty').each(function (i) {
+            $(this).children('td').eq(0).text(i + 1);
         });
     });
-}
 
-let lsDeleteSrNo = null;
-let lsDeleteSubSerial = null;
+    // save draft -> POST to /local-sales
+    $(document).off('click.lsDraftSave').on('click.lsDraftSave', '.draft-save', function () {
+        const $m = $(this).closest('tr[data-draft="1"]');
+        const id = $m.data('id');
+        const $d = $(`tr.detail-row[data-id="${id}"]`);
 
-function confirmLocalDelete(srNo, subSerial = null) {
-    lsDeleteSrNo = srNo;
-    lsDeleteSubSerial = subSerial;
+        recalcItemTable($d);
+        const agg = $d.data('agg') || {};
 
-    if (subSerial === null) {
-        $('#lsDeleteConfirmationText').text(`Are you sure you want to delete SR.NO ${srNo}?`);
-        $('#lsSubSerialInputContainer').hide();
-    } else {
-        $('#lsDeleteConfirmationText').text(`Enter sub-serial number to delete specific entry OR type 'all' to delete the entire group (SR.NO ${srNo})`);
-        $('#lsSubSerialInput').val('');
-        $('#lsSubSerialInputContainer').show();
-    }
-
-    $('#lsDeleteModal').modal('show');
-}
-
-function editEntry(sr_no, sub_serial = null) {
-    const group = window.localSalesData.find(g => g.sr_no == sr_no);
-    if (!group) return alert('Data not found.');
-
-    // 1. Handle single entry row directly
-    if (group.entries.length === 1) {
-        prefillLocalEditForm(group.entries[0]);
-        return;
-    }
-
-    // 2. For multiple entries, open modal to ask sub-serial
-    $('#targetSrNoForEdit').val(sr_no); // Store the SR number
-    $('#subSerialInput').val('');       // Clear input
-    $('#subSerialEditModal').modal('show'); // Open modal
-}
-
-$('#confirmSubSerialEditBtn').on('click', function () {
-    const sr_no = $('#targetSrNoForEdit').val();
-    const sub_serial = parseInt($('#subSerialInput').val());
-
-    const group = window.localSalesData.find(g => g.sr_no == sr_no);
-    if (!group) return alert('Group not found.');
-
-    if (!sub_serial || sub_serial < 1 || sub_serial > group.entries.length) {
-        alert('Invalid sub-serial number!');
-        return;
-    }
-
-    const target = group.entries.find(e => e.sub_serial == sub_serial);
-    if (!target) {
-        alert('Entry not found.');
-        return;
-    }
-
-    $('#subSerialEditModal').modal('hide');
-    prefillLocalEditForm(target);
-});
-
-function prefillLocalEditForm(target) {
-    $('#clientName').val(target.client);
-    $('#localDate').val(target.date);
-    $('#ls-description').val(target.description);
-    $('#ls-unit-price').val(target.unit_price);
-    $('#noOfCtns').val(target.no_of_ctns);
-    $('#ls-units-per-ctn').val(target.units_per_ctn);
-    $('#ls-total-units').val(target.total_no_of_units);
-    $('#vatPercent').val(target.vat_percentage);
-    $('#paymentStatus').val(target.payment_status);
-    $('#ls-remarks').val(target.remarks);
-
-    $('#localSubmitBtn').addClass('d-none');
-    $('#localUpdateBtn').removeClass('d-none').data('update-id', target.id);
-
-    // Show manual modal if needed
-    const noCtns = parseInt(target.no_of_ctns) || 0;
-    const unitsPerCtn = parseInt(target.units_per_ctn) || 0;
-    if (noCtns === 0 && unitsPerCtn === 0) {
-        $('#manualTotalUnitsModal').modal('show');
-        $('#manualTotalUnitsInput').val(target.total_no_of_units || '');
-    }
-    scrollToTopForm();
-}
-
-function copyEntry(sr_no, sub_serial = null) {
-    const group = window.localSalesData.find(g => g.sr_no == sr_no);
-    if (!group) return alert('Data not found.');
-
-    if (group.entries.length === 1) {
-        prefillLocalCopyForm(group.entries[0]);
-        return;
-    }
-
-    // For multiple entries, open modal
-    $('#targetSrNoForCopy').val(sr_no); // Store SR number
-    $('#subSerialInputForCopy').val(''); // Clear input
-    $('#subSerialCopyModal').modal('show'); // Open modal
-}
-
-function prefillLocalCopyForm(target) {
-    $('#clientName').val(target.client);
-    $('#localDate').val(target.date);
-    $('#ls-description').val(target.description);
-    $('#ls-unit-price').val(target.unit_price);
-    $('#noOfCtns').val(target.no_of_ctns);
-    $('#ls-units-per-ctn').val(target.units_per_ctn);
-    $('#ls-total-units').val(target.total_no_of_units);
-    $('#vatPercent').val(target.vat_percentage);
-    $('#paymentStatus').val(target.payment_status);
-    $('#ls-remarks').val(target.remarks);
-
-    $('#localUpdateBtn').addClass('d-none');
-    $('#localSubmitBtn').removeClass('d-none');
-
-    $('#localUpdateBtn').removeData('update-id');
-    scrollToTopForm();
-}
-
-function scrollToTopForm() {
-    $('html, body').animate({
-        scrollTop: $('#localSalesForm').offset().top - 50
-    }, 300);
-}
-
-function scrollToBottomTable() {
-    $('html, body').animate({
-        scrollTop: $('#localSalesTableWrapper').offset().top + $('#localSalesTableWrapper').outerHeight()
-    }, 300);
-}
-
-function convertToISO(dateStr) {
-    if (!dateStr) return '';
-    const d = new Date(dateStr);
-    return d.toISOString().split('T')[0];
-}
-
-function exportLOCALExcel() {
-    const wb = XLSX.utils.book_new();
-    const wsData = [];
-
-    // Get Headers
-    const headers = [];
-    $('#localSalesTable thead tr:eq(0) th').each(function (index) {
-        if (index < 13) { // Skip Action column
-            headers.push($(this).text().trim());
-        }
-    });
-    wsData.push(headers);
-
-    // Get Rows
-    $('#localSalesTableBody tr:visible').each(function () {
-        const cells = $(this).find('td');
-        const allColumns = [];
-
-        cells.each(function (i) {
-            if (i < 13) {
-                const text = $(this).html().trim();
-                // Split by <br> to get each line separately
-                const parts = text.split(/<br\s*\/?>/i).map(p => $('<div>').html(p).text().trim());
-                allColumns.push(parts);
-            }
-        });
-
-        const maxLines = Math.max(...allColumns.map(col => col.length));
-
-        // For each line, build a row
-        for (let line = 0; line < maxLines; line++) {
-            const row = [];
-            allColumns.forEach(col => {
-                row.push(col[line] || '');
+        // collect items (optional)
+        const items = [];
+        $d.find('.ls-items-body > tr').each(function () {
+            items.push({
+                description: $(this).find('.li-desc').val() || '',
+                units: Number($(this).find('.li-units').val() || 0),
+                unit_price: Number($(this).find('.li-unitprice').val() || 0),
+                vat: Number($(this).find('.li-vat').val() || 0),
+                status: ($(this).find('.li-status').val() || 'pending'),
+                remarks: $(this).find('.li-remarks').val() || ''
             });
-            wsData.push(row);
-        }
+        });
+
+        // derive top-level payment_status (any pending > partial > paid)
+        const statuses = items.map(x => x.status);
+        let payment_status = 'paid';
+        if (statuses.includes('pending')) payment_status = 'pending';
+        else if (statuses.includes('partial')) payment_status = 'partial';
+
+        const payload = {
+            date: String($m.data('date') || '').trim(),
+            client: $m.children('td').eq(2).text().trim(),
+            description: $m.children('td').eq(3).text().trim(), // brief description
+            payment_status,
+
+            // map aggregates to existing schema (no schema change)
+            total_units: agg.total_units || 0,
+            total_ex_vat: agg.total_ex_vat || 0,
+            vat_amount: agg.vat_amount || 0,
+            total_inc_vat: agg.total_inc_vat || 0,
+
+            // legacy fields not applicable in itemized mode
+            no_of_ctns: 0,
+            units_per_ctn: 0,
+            unit_price: 0,
+            vat_percent: 5,
+
+            // optional extra (server can ignore)
+            items: JSON.stringify(items),
+            remarks: items.map(x => x.remarks).filter(Boolean).join(' | ')
+        };
+
+        $.ajax({ url: '/local-sales', method: 'POST', data: payload })
+            .done(() => {
+                setItemsBaseline($d, getItemsFromDetail($d));
+                updateRowDirtyUI($d);
+                loadLocalSales();
+                $(document).trigger('localSales:updated');
+            })
+            .fail(err => { console.error('Local save failed', err); alert('Failed to save.'); });
     });
 
-    // Append Sheet
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    $('#localSalesBody')
+        .off('click.lsRowSave', '.row-save')
+        .on('click.lsRowSave', '.row-save', function () {
+            const $master = $(this).closest('tr');
+            const id = $master.data('id');
+            const $detail = $(`tr.detail-row[data-parent="${id}"]`);
 
-    // Auto-wrap all cells
-    const range = XLSX.utils.decode_range(ws['!ref']);
-    for (let R = range.s.r; R <= range.e.r; ++R) {
-        for (let C = range.s.c; C <= range.e.c; ++C) {
-            const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
-            if (!ws[cellRef]) continue;
-            if (!ws[cellRef].s) ws[cellRef].s = {};
-            ws[cellRef].s.alignment = { wrapText: true };
-        }
+            // make sure totals are fresh
+            recalcItemTable($detail);
+
+            // 1) collect current editable values
+            const items = getItemsFromDetail($detail); // uses YOUR function
+
+            // 2) aggregates
+            const sums = items.reduce((a, it) => {
+                const ex = Number(it.units) * Number(it.unit_price);
+                const inc = ex + Number(it.vat);
+                a.units += Number(it.units);
+                a.ex += ex;
+                a.vat += Number(it.vat);
+                a.inc += inc;
+                return a;
+            }, { units: 0, ex: 0, vat: 0, inc: 0 });
+
+            // 3) roll-up payment status
+            const sts = items.map(x => String(x.status || '').toLowerCase());
+            let payment_status = 'paid';
+            if (sts.includes('pending')) payment_status = 'pending';
+            else if (sts.includes('partial')) payment_status = 'partial';
+
+            // 4) PUT
+            $.ajax({
+                url: `/local-sales/${id}`,
+                method: 'PUT',
+                data: {
+                    replace_items: 1,
+                    items: JSON.stringify(items),
+                    total_units: sums.units,
+                    total_ex_vat: sums.ex,
+                    vat_amount: sums.vat,
+                    total_inc_vat: sums.inc,
+                    payment_status
+                }
+            })
+                .done(() => {
+                    // 1) Read the CURRENT values from the DOM and normalize
+                    const normalized = getItemsFromDetail($detail); // <- your function returns normalized items
+
+                    // 2) Update the cache so reopening uses fresh items
+                    window.localItemsCache = window.localItemsCache || {};
+                    window.localItemsCache[id] = normalized;
+
+                    // 3) Reset baseline + hide Save (clean state)
+                    if (typeof setItemsBaseline === 'function') setItemsBaseline($detail, normalized);
+                    if (typeof updateRowDirtyUI === 'function') updateRowDirtyUI($detail);
+
+                    // discard stale cache so items re-fetch cleanly on next expand
+                    if (window.localItemsCache) delete window.localItemsCache[id];
+                    loadLocalSales(); // full redraw
+                })
+                .fail(xhr => {
+                    const j = xhr.responseJSON;
+                    const msg = j?.message || 'Failed to save changes.';
+                    alert(msg);
+                    console.error('Local update failed', xhr);
+                });
+        });
+
+    // delete
+    $(document).off('click.lsDelete').on('click.lsDelete', '.local-delete', function () {
+        const $master = $(this).closest('tr');
+        const id = $master.data('id');
+        if (!confirm('Delete this row?')) return;
+
+        $.ajax({ url: '/local-sales/' + id, method: 'DELETE' })
+            .done(() => {
+                $(`tr.detail-row[data-parent="${id}"]`).remove();
+                $master.remove();
+                // reindex S.No
+                $('#localSalesBody > tr').not('.detail-row,.ls-empty').each(function (i) {
+                    $(this).children('td').eq(0).text(i + 1);
+                });
+                $(document).trigger('localSales:updated');
+            })
+            .fail(err => {
+                console.error('Local delete failed', err);
+                alert('Failed to delete.');
+            });
+    });
+
+    $('#localSalesBody')
+        .off('click.lsAddItem', '.add-item-btn')
+        .on('click.lsAddItem', '.add-item-btn', function () {
+            const $detail = $(this).closest('tr.detail-row');
+            const $newRow = addLocalItemRow($detail);
+
+            refreshSerialVisibility($detail);
+            recalcItemTable($detail);
+            autoGrowTextareas($newRow);
+
+            const id = $detail.data('parent') || $detail.data('id');
+            $(`#localSalesBody > tr[data-id="${id}"] .row-save`).removeClass('hidden');
+
+            // focus first editable field in the new row
+            $newRow.find('.li-desc, .li-units, .li-unitprice, .li-vat')
+                .filter(':input')
+                .first()
+                .focus();
+        });
+
+    // ONE unified delegate for edit → recalc → autosize → dirty UI
+    $('#localSalesBody')
+        .off('input.lsDirty change.lsDirty keyup.lsDirty paste.lsDirty', '.ls-items-body :input')
+        .on('input.lsDirty change.lsDirty keyup.lsDirty paste.lsDirty', '.ls-items-body :input', function () {
+            const $detail = $(this).closest('tr.detail-row');
+
+            // recalcs totals + aggregates on the detail row
+            recalcItemTable($detail);
+
+            // autosize if it's a textarea we marked as growable
+            if ($(this).is('textarea.ls-plain, textarea.auto-grow')) {
+                autosizeTextarea(this);
+            }
+
+            // show/hide the Save button depending on real changes
+            updateRowDirtyUI($detail);
+        });
+
+    // live auto-grow while typing
+    $('#localSalesBody')
+        .off('input.autogrow', 'textarea.ls-plain')
+        .on('input.autogrow', 'textarea.ls-plain', function () {
+            autosizeTextarea(this);
+        });
+
+    // After you append rows in renderLocalRows / addLocalItemRow:
+    $('#localSalesBody .auto-grow').each(function () { autosizeTextarea(this); });
+
+    // when opening the Upload modal, clear prior selection + labels
+    $(document).off('click.lsUpload').on('click.lsUpload', '.ls-upload', function (e) {
+        e.stopPropagation();
+        const id = $(this).data('id');
+        $('#lsUploadSaleId').val(id);
+        $('#lsUploadForm .fp-input').val('');               // clear files
+        $('#lsUploadForm [data-fp-label]').val('No file chosen'); // reset labels
+        $('#lsUploadModal').removeClass('hidden').addClass('flex');
+    });
+
+    // Close upload modal
+    $('#lsUploadClose,#lsUploadCancel').off('click.lsUploadClose').on('click.lsUploadClose', function () {
+        $('#lsUploadModal').addClass('hidden').removeClass('flex');
+    });
+
+    // Submit upload
+    $('#lsUploadForm').off('submit.lsUpload').on('submit.lsUpload', function (e) {
+        e.preventDefault();
+        const id = $('#lsUploadSaleId').val();
+        const fd = new FormData(this);
+
+        $.ajax({
+            url: `/local-sales/${id}/attachments`,
+            method: 'POST',
+            data: fd,
+            processData: false,
+            contentType: false,
+            headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
+        })
+            .done(() => {
+                $('#lsUploadModal').addClass('hidden').removeClass('flex');
+                $(document).trigger('localSales:attachmentsUpdated', { id });
+                initTippy();
+            })
+            .fail(xhr => {
+                alert(xhr?.responseJSON?.message || 'Upload failed.');
+                console.error('ls upload fail', xhr);
+            });
+    });
+
+    // --- Attachments: open viewer modal ---
+    $(document).off('click.lsView').on('click.lsView', '.ls-view', function (e) {
+        e.stopPropagation();
+        const id = $(this).data('id');
+
+        // try API; if it fails (404 etc), still open with all "Not Uploaded"
+        $.getJSON(`/local-sales/${id}/attachments`)
+            .done(res => {
+                $('#lsViewBody').html(
+                    lsMkAttRow('Invoice', res.invoice) +
+                    lsMkAttRow('Bank Transfer Receipt', res.receipt) +
+                    lsMkAttRow('Delivery Note', res.note)
+                );
+                $('#lsDownloadPdfBtn').attr('href', `/local-sales/${id}/attachments/pdf`);
+                $('#lsViewModal').removeClass('hidden').addClass('flex');
+            })
+            .fail(() => {
+                // open with all empty instead of alert
+                $('#lsViewBody').html(
+                    lsMkAttRow('Invoice', null) +
+                    lsMkAttRow('Bank Transfer Receipt', null) +
+                    lsMkAttRow('Delivery Note', null)
+                );
+                $('#lsDownloadPdfBtn').attr('href', `/local-sales/${id}/attachments/pdf`);
+                $('#lsViewModal').removeClass('hidden').addClass('flex');
+            });
+    });
+
+    $('#lsViewClose,#lsViewClose2').off('click.lsViewClose').on('click.lsViewClose', function () {
+        $('#lsViewModal').addClass('hidden').removeClass('flex');
+    });
+
+    $(document).on('localSales:attachmentsUpdated', function (e, payload) {
+        const id = payload?.id;
+        if (!id) return;
+        $.getJSON(`/local-sales/${id}/attachments`, function (res) {
+            const hasAny = !!(res.invoice || res.receipt || res.note);
+            const $btn = $(`#localSalesBody > tr[data-id="${id}"] .ls-view`);
+            $btn.toggleClass('ring-2 ring-offset-1 ring-blue-300', hasAny);
+        });
+    });
+
+    // open OS picker
+    $(document).off('click.fpBrowse').on('click.fpBrowse', '.fp-browse', function () {
+        const id = $(this).data('for');
+        $('#' + id).trigger('click');
+    });
+
+    // show picked filename
+    $(document).off('change.fpInput').on('change.fpInput', '.fp-input', function () {
+        const id = this.id;
+        const name = this.files && this.files.length ? this.files[0].name : 'No file chosen';
+        $(`[data-fp-label="${id}"]`).val(name);
+    });
+
+}
+
+// Format "YYYY-MM-DD" as "21 Aug 2025" using UTC to avoid TZ shifts
+function formatSheetDateUTC(ymd) {
+    if (!ymd) return '';
+    const [y, m, d] = ymd.split('-').map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d)); // UTC safe
+    return new Intl.DateTimeFormat('en-GB', {
+        weekday: 'long',
+        day: '2-digit',
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'UTC'
+    }).format(dt);
+}
+
+// If you still need a normalized Y-M-D (strip any time)
+function normalizeYMD(s) {
+    return (s || '').slice(0, 10); // "YYYY-MM-DD"
+}
+
+function fileNameFromUrl(url) {
+    if (!url) return '';
+    try {
+        const clean = url.split('?')[0]; // strip query
+        const last = clean.substring(clean.lastIndexOf('/') + 1);
+        return decodeURIComponent(last || '');
+    } catch { return ''; }
+}
+
+// helper to render "Open" link or "Not Uploaded"
+function lsMkAttRow(label, url) {
+    const right = url
+        ? `<span class="ml-2 text-gray-500 break-all">${fileNameFromUrl(url)}</span>
+       <a class="text-blue-600 underline" href="${url}" target="_blank">Open</a>`
+        : `<span class="text-gray-400">Not Uploaded</span>`;
+    return `
+    <div class="flex items-center justify-between gap-3">
+      <div class="font-medium">${label}:</div>
+      <div class="text-right">${right}</div>
+    </div>`;
+}
+
+function buildEditableItemRowsHtml(items, defaultStatus = 'pending') {
+    const esc = s => String(s || '').replace(/</g, '&lt;');
+    const num = n => (Number(n) || 0);
+    const fmt = n => (Number(n) || 0).toLocaleString('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    return items.map((it, idx) => {
+        const u = num(it.units);
+        const up = num(it.unit_price);
+        const v = num(it.vat);
+        const ex = u * up;
+        const inc = ex + v;
+        const st = (it.status || defaultStatus).toLowerCase();
+
+        return `
+      <tr class="ls-item odd:bg-white even:bg-gray-50" data-idx="${idx + 1}">
+        <td class="px-4 py-2 text-left"><span class="sn-text">${idx + 1}</span></td>
+        <td class="px-4 py-2 align-top">
+          <textarea class="li-desc ls-plain w-full text-gray-800 px-2 py-1" rows="1"
+            placeholder="Description">${esc(it.description || '')}</textarea>
+        </td>
+        <td class="px-4 py-2 text-right">
+          <input type="number" min="0" step="1" class="li-units w-full border rounded px-2 py-1 text-right" value="${u}">
+        </td>
+        <td class="px-4 py-2 text-right">
+          <input type="number" min="0" step="0.01" class="li-unitprice w-full border rounded px-2 py-1 text-right" value="${up}">
+        </td>
+        <td class="px-4 py-3 text-right tabular-nums li-ex">${fmt(ex)}</td>
+        <td class="px-4 py-2 text-right">
+          <input type="number" min="0" step="0.01" class="li-vat w-full border rounded px-2 py-1 text-right" value="${v}">
+        </td>
+        <td class="px-4 py-3 text-right tabular-nums li-inc font-semibold">${fmt(inc)}</td>
+        <td class="px-4 py-2 text-center">
+          <select class="li-status w-full border rounded px-2 py-1">
+            <option value="paid" ${st === 'paid' ? 'selected' : ''}>Paid</option>
+            <option value="pending" ${st === 'pending' ? 'selected' : ''}>Pending</option>
+            <option value="partial" ${st === 'partial' ? 'selected' : ''}>Partially Paid</option>
+          </select>
+        </td>
+        <td class="px-4 py-2 align-top">
+          <textarea class="li-remarks ls-plain w-full text-gray-800 px-2 py-1" rows="1"
+            placeholder="Remarks">${esc(it.remarks || '')}</textarea>
+        </td>
+      </tr>
+    `;
+    }).join('');
+}
+
+function loadLocalItemsOnce($detail, id) {
+    if ($detail.data('loaded') === 1) {
+        return $.Deferred().resolve(window.localItemsCache[id] || []).promise();
     }
 
-    XLSX.utils.book_append_sheet(wb, ws, "Local Sales");
-    XLSX.writeFile(wb, 'local_sales.xlsx');
+    if (window.localItemsCache[id]) {
+        renderItemsIntoDetail($detail, window.localItemsCache[id]);
+        return $.Deferred().resolve(window.localItemsCache[id]).promise();
+    }
+
+    return $.getJSON(`/local-sales/${id}/items`)
+        .done(res => {
+            const items = Array.isArray(res?.data) ? res.data : [];
+            window.localItemsCache[id] = items;      // cache fresh copy
+            renderItemsIntoDetail($detail, items);   // use the new renderer
+        })
+        .fail(() => {
+            $detail.find('.ls-items-body')
+                .empty()
+                .append(`<tr><td colspan="9" class="p-3 text-center text-red-600">Failed to load items.</td></tr>`);
+        });
+}
+
+function toISODateSafe(s) {
+    if (!s) return '';
+    // force local midnight to avoid TZ shifts
+    const d = new Date(`${s}T00:00:00`);
+    return isNaN(d) ? s : d.toISOString().slice(0, 10);
+}
+
+// helper for status badge (include once)
+function lsStatusBadge(status) {
+    const s = (status || 'pending').toLowerCase();
+    const cls =
+        s === 'paid' ? 'bg-green-100 text-green-700' :
+            s === 'partial' ? 'bg-blue-100 text-blue-700' :
+                'bg-yellow-100 text-yellow-700';
+    const label = s === 'partial' ? 'Partially Paid' : (s.charAt(0).toUpperCase() + s.slice(1));
+    return `<span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${cls}">${label}</span>`;
+}
+
+function initTippy() {
+    try {
+        if (typeof tippy === 'function') {
+            tippy('[data-tippy-content]', { theme: 'light', delay: [150, 0], appendTo: document.body });
+        }
+    } catch { }
+}
+
+// Build master + rich detail (colspan = 5 to match your table)
+function buildLocalDraftRow({ id, idx, date, client, desc }) {
+
+    const $master = $(`
+        <tr class="group hover:bg-gray-50 cursor-pointer" data-id="${id}" data-draft="1">
+            <td class="px-3 py-2 align-top">${idx}</td>
+            <td class="px-3 py-2 align-top">${date}</td>
+            <td class="px-3 py-2 align-top">${client}</td>
+            <td class="px-3 py-2 align-top">${desc}</td>
+            <td class="px-3 py-2 align-top text-right font-semibold ls-total-cell">AED 0.00</td>
+            <td class="px-3 py-2 align-top text-center actions-cell cursor-default">
+                <div class="flex items-center justify-center gap-1">
+                    <button type="button" class="draft-save px-2 py-1 text-sm rounded bg-green-600 hover:bg-green-700 text-white mr-2" title="Save" data-tippy-content="Save"><i class="bi bi-check2-circle"></i></button>
+                    <button type="button" class="draft-cancel px-2 py-1 text-sm rounded bg-red-600 hover:bg-red-700 text-white" title="Discard" data-tippy-content="Discard"><i class="bi bi-x-circle"></i></button>
+                </div>
+            </td>
+        </tr>
+    `);
+
+    const $detail = $(`
+        <tr class="detail-row bg-gray-50/40" data-id="${id}" data-draft="1">
+        <td colspan="6" class="px-3 py-3">
+            <div class="rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+            <div class="px-4 py-2 bg-gray-50 border-b text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                Items
+            </div>
+
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 text-gray-600">
+                <tr>
+                    <th class="px-4 py-3 text-left w-12">#</th>
+                    <th class="px-4 py-3 text-left">Description</th>
+                    <th class="px-4 py-3 text-right w-28">No. of Units</th>
+                    <th class="px-4 py-3 text-right w-28">Unit Price</th>
+                    <th class="px-4 py-3 text-right w-36">Total w/o VAT</th>
+                    <th class="px-4 py-3 text-right w-28">VAT</th>
+                    <th class="px-4 py-3 text-right w-36">Total w/ VAT</th>
+                    <th class="px-4 py-3 text-center w-40">Payment Status</th>
+                    <th class="px-4 py-3 text-left w-64">Remarks</th>
+                </tr>
+                </thead>
+                <tbody class="ls-items-body divide-y divide-gray-100"></tbody>
+            </table>
+
+            <div class="px-4 py-3 bg-gray-50 border-t flex items-center justify-between">
+                <button class="add-item-btn inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700" data-target="${id}">
+                <i class="bi bi-plus-lg"></i><span>Add Item</span>
+                </button>
+
+                <div class="text-xs text-gray-500">Totals auto-update as you type.</div>
+            </div>
+            </div>
+        </td>
+        </tr>
+        `);
+
+    return [$master, $detail];
+}
+
+function addLocalItemRow($detail) {
+    const idx = $detail.find('.ls-items-body > tr').length + 1;
+    const $row = $(`
+    <tr class="ls-item" data-idx="${idx}">
+      <td class="px-4 py-2 text-left"><span class="sn-text">${idx}</span></td>
+      <td class="px-4 py-2 align-top">
+        <textarea
+            class="li-desc ls-plain w-full text-gray-800 bg-transparent
+                border border-transparent rounded px-2 py-1
+                focus:border-gray-300 focus:ring-0 resize-none"
+            rows="1" placeholder="Description"></textarea>
+        </td>
+      <td class="px-4 py-2 text-right"><input type="number" min="0" step="1" class="li-units w-full border rounded px-2 py-1 text-right" value="0"></td>
+      <td class="px-4 py-2 text-right"><input type="number" min="0" step="0.01" class="li-unitprice w-full border rounded px-2 py-1 text-right" value="0"></td>
+      <td class="px-4 py-3 text-right tabular-nums li-ex">0.00</td>
+      <td class="px-4 py-2 text-right"><input type="number" min="0" step="0.01" class="li-vat w-full border rounded px-2 py-1 text-right" value="0"></td>
+      <td class="px-4 py-3 text-right tabular-nums li-inc">0.00</td>
+      <td class="px-4 py-2 text-center">
+        <select class="li-status w-full border rounded px-2 py-1">
+          <option value="paid">Paid</option>
+          <option value="pending" selected>Pending</option>
+          <option value="partial">Partially Paid</option>
+        </select>
+      </td>
+      <td class="px-4 py-2 align-top">
+        <textarea
+            class="li-remarks ls-plain w-full text-gray-800 bg-transparent
+                border border-transparent rounded px-2 py-1
+                focus:border-gray-300 focus:ring-0 resize-none"
+            rows="1" placeholder="Remarks"></textarea>
+        </td>
+    </tr>
+  `);
+    $detail.find('.ls-items-body').append($row);
+    return $row;
+}
+
+// you already have this:
+function autosizeTextarea(el) {
+    el.style.height = 'auto';
+    el.style.height = (el.scrollHeight || 0) + 'px';
+}
+
+function autoGrowTextareas($scope) {
+    // $scope can be a detail row; default to document
+    const $root = ($scope && $scope.length) ? $scope : $(document);
+    $root.find('textarea.ls-plain').each((_, el) => autosizeTextarea(el));
+}
+
+function setItemsBaseline($detail, items) {
+    $detail.data('baseline', JSON.stringify(normalizeItems(items || [])));
+}
+
+function getBaselineItems($detail) {
+    try {
+        const raw = $detail.data('baseline');
+        return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+}
+
+// --- render items into a detail row as EDITABLE inputs ---
+function renderItemsIntoDetail($detail, items) {
+    const normalized = normalizeItems(items || []);
+    const html = buildEditableItemRowsHtml(normalized, 'pending');
+    $detail.find('.ls-items-body').empty().append(html);
+
+    refreshSerialVisibility($detail);
+    $detail.attr('data-loaded', '1').data('loaded', 1);
+    autoGrowTextareas($detail);
+    setItemsBaseline($detail, normalized);
+    updateRowDirtyUI($detail);
+}
+
+// --- Dirty tracking helpers ---
+function normalizeItems(arr) {
+    // keep only the fields that matter, normalize numbers
+    return (arr || []).map(x => ({
+        description: String(x.description || '').trim(),
+        units: Number(x.units || 0),
+        unit_price: Number(x.unit_price || 0),
+        vat: Number(x.vat || 0),
+        status: String(x.status || 'pending').toLowerCase(),
+        remarks: String(x.remarks || '').trim(),
+    }));
+}
+
+function getItemsFromDetail($detail) {
+    const items = [];
+    $detail.find('.ls-items-body > tr').each(function () {
+        const $r = $(this);
+        items.push({
+            description: $r.find('.li-desc').val() || '',
+            units: Number($r.find('.li-units').val() || 0),
+            unit_price: Number($r.find('.li-unitprice').val() || 0),
+            vat: Number($r.find('.li-vat').val() || 0),
+            status: ($r.find('.li-status').val() || 'pending').toLowerCase(),
+            remarks: $r.find('.li-remarks').val() || '',
+        });
+    });
+    return normalizeItems(items);
+}
+
+function itemsEqual(a, b) {
+    return JSON.stringify(normalizeItems(a)) === JSON.stringify(normalizeItems(b));
+}
+
+// show/hide the Save button based on diff vs baseline
+function updateRowDirtyUI($detail) {
+    const id = $detail.data('parent') || $detail.data('id');
+    const $save = $(`#localSalesBody > tr[data-id="${id}"] .row-save`);
+
+    const baselineStr = String($detail.data('baseline') || '[]'); // already normalized+stringified
+    const currentStr = JSON.stringify(normalizeItems(getItemsFromDetail($detail)));
+
+    $save.toggleClass('hidden', baselineStr === currentStr);
+}
+
+function refreshSerialVisibility($detail) {
+    const $rows = $detail.find('.ls-items-body > tr');
+    const single = $rows.length <= 1;
+    $rows.find('.sn-text')[single ? 'addClass' : 'removeClass']('invisible');
+}
+
+function recalcItemTable($detail) {
+    let sumUnits = 0, sumEx = 0, sumVat = 0, sumInc = 0;
+
+    $detail.find('.ls-items-body > tr').each(function () {
+        const $r = $(this);
+        const u = Number($r.find('.li-units').val() || 0);
+        const up = Number($r.find('.li-unitprice').val() || 0);
+        const v = Number($r.find('.li-vat').val() || 0);
+        const ex = u * up;
+        const inc = ex + v;
+
+        $r.find('.li-ex').text(ex.toFixed(2));
+        $r.find('.li-inc').text(inc.toFixed(2));
+
+        sumUnits += u; sumEx += ex; sumVat += v; sumInc += inc;
+    });
+
+    $detail.data('agg', {
+        total_units: sumUnits,
+        total_ex_vat: sumEx,
+        vat_amount: sumVat,
+        total_inc_vat: sumInc
+    });
+
+    const id = $detail.data('parent') || $detail.data('id');
+    $(`#localSalesBody > tr[data-id="${id}"] .ls-total-cell`).text(fmtAED(sumInc));
+
+    updateLocalTotalsCard();
+}
+
+function updateLocalTotalsCard() {
+    let total = 0;
+    $('#localSalesBody .ls-total-cell').each(function () {
+        // parse "AED 1,234.56"
+        const n = parseFloat($(this).text().replace(/[^\d.-]/g, '')) || 0;
+        total += n;
+    });
+    $('#localTotalSales').text(fmtAED(total));
+    const count = $('#localSalesBody > tr').not('.detail-row,.ls-empty').length;
+    $('#localTotalCount').text(`${count} record${count === 1 ? '' : 's'}`);
+
+    // NEW: persist for Summary
+    try {
+        window.localSalesTotal = total;                  // fast in-memory
+        localStorage.setItem('localSalesTotal', String(total)); // survives refresh
+    } catch { }
+    $(document).trigger('localSales:updated');
+}
+
+// loader
+function loadLocalSales() {
+    const $body = $('#localSalesBody');
+    if (!$body.length) return;
+    $.get('/local-sales')
+        .done(res => renderLocalRows(res.data || []))
+        .fail(() => $body.html(`<tr><td colspan="6" class="px-3 py-3 text-red-600">Failed to load.</td></tr>`));
 }
 
 // Summery Sheet Logic
 
+// ---- Summary helpers ----
+const fmtAED = n => 'AED ' + (parseFloat(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2 });
+
+function getGtsTotalsFromStorage() {
+    try {
+        if (window.gtsTotals && typeof window.gtsTotals.material === 'number') return window.gtsTotals;
+        const raw = localStorage.getItem('gtsTotals');
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.material === 'number') return parsed;
+    } catch { }
+    return null;
+}
+
+// Fallback API for a hard refresh before user visits Local sheet
+function fetchLocalSalesTotal() {
+    return $.getJSON('summary/local-sales/total', { _t: Date.now() })
+        .then(res => {
+            const tot = Number(res?.total) || 0;
+            try { localStorage.setItem('localSalesTotal', String(tot)); } catch { }
+            return tot;
+        })
+        .catch(() => {
+            // fallback to cache on network error
+            try {
+                const v = localStorage.getItem('localSalesTotal');
+                return v != null ? (Number(v) || 0) : 0;
+            } catch { return 0; }
+        });
+}
+
+// Update Summary’s numbers (cards + chart) from {material, shipping, localSalesTotal}
+function renderSummaryFromGtsTotals({ material = 0, shipping = 0 } = {}) {
+    material = Number(material) || 0;
+    shipping = Number(shipping) || 0;
+
+    const cashOut = material + shipping;
+    $('#totalPurchaseMaterial').text(fmtAED(material));
+    $('#totalShippingCost').text(fmtAED(shipping));
+    $('#cashOutAmount').text(fmtAED(cashOut));
+
+    // Do NOT re-render cash-in cards here.
+    // Recompute profit using what’s already on screen (or last cached).
+    const cashInNow = (window._ciLast)
+        ? (Number(window._ciLast?.us?.material || 0)
+            + Number(window._ciLast?.sq?.material || 0)
+            + Number(window._ciLast?.local?.material || 0)
+            + Number(window._ciLast?.customer?.material || 0)
+            + ((window._ciLast?.customer?.hasShipping === false) ? 0
+                : Number(window._ciLast?.customer?.shipping || 0)))
+        : getNum('#cashInAmount');
+
+    const profit = cashInNow - cashOut;
+    $('#profitAmount').text(fmtAED(profit));
+    // keep chart in sync even if only cash-out changed
+    scheduleChartUpdate(cashInNow, cashOut, profit, !window._chartIntroPlayed);
+}
+
+// Load Summary (now uses cached DOM totals if present)
 function loadSummarySheet() {
-    $.get('/summary-data', function (data) {
-        console.log('Summary Data Loaded:', data);
-        const formatAED = (amount) => 'AED ' + parseFloat(amount).toLocaleString(undefined, { minimumFractionDigits: 2 });
+    const gts = getGtsTotalsFromStorage();
+    if (gts) {
+        // Fetch Local Sales, then render
+        fetchLocalSalesTotal().then(lsTotal => {
+            renderSummaryFromGtsTotals({
+                material: gts.material || 0,
+                shipping: gts.shipping || 0,
+                localSalesTotal: lsTotal || 0
+            });
+            refreshLoanOutstandingHybrid();
+        });
+        return;
+    }
 
-        $('#totalPurchaseMaterial').text(formatAED(data.total_purchase_of_material));
-        $('#totalShippingCost').text(formatAED(data.total_shipping_cost));
-        $('#cashOutAmount').text(formatAED(data.cash_out));
-
-        // Cache Cash Out globally
-        cachedCashOut = parseFloat(data.cash_out) || 0;
+    // Fallback: fetch summary-data and LS in parallel on hard refresh
+    $.when(
+        $.getJSON('summary-data'),
+        fetchLocalSalesTotal()
+    ).done((dataResp, lsTotal) => {
+        const data = dataResp[0] || {};
+        renderSummaryFromGtsTotals({
+            material: data.total_purchase_of_material || 0,
+            shipping: data.total_shipping_cost || 0,
+            localSalesTotal: lsTotal || 0
+        });
+        refreshLoanOutstandingHybrid();
+    }).fail(() => {
+        renderSummaryFromGtsTotals({ material: 0, shipping: 0, localSalesTotal: 0 });
+        refreshLoanOutstandingHybrid();
     });
 }
+
+// Bind the listener ONCE at file scope
+(function bindGtsTotalsListenerOnce() {
+    if (window.__gtsTotalsListenerBound) return;
+    window.__gtsTotalsListenerBound = true;
+
+    document.addEventListener('gts:totals-changed', (e) => {
+        const active = localStorage.getItem('activeSheet');
+        if (active === 'summary') {
+            renderSummaryFromGtsTotals(e.detail);
+        }
+    });
+})();
 
 let summaryChart = null;
 let cachedCashOut = 0;
 
-function updateSummaryChart(cashIn, cashOut, profit) {
-    const ctx = document.getElementById('summaryChart').getContext('2d');
+// Helpers (put once near your summary code)
+function getNum(sel) {
+    const el = document.querySelector(sel);
+    if (!el) return 0;
+    return parseFloat((el.textContent || '').replace(/[^\d.-]/g, '')) || 0;
+}
 
-    // Destroy existing chart to avoid duplicate rendering
-    if (summaryChart) {
-        summaryChart.destroy();
-    }
+function getLocalSalesAmount() {
+    // Prefer the Local Sales total card if present
+    const txt = ($('#localTotalSales').text() || '').trim();
+    if (txt) return parseFloat(txt.replace(/[^\d.-]/g, '')) || 0;
 
-    summaryChart = new Chart(ctx, {
+    // Fallback: sum master-row totals in the Local Sales sheet (if rendered)
+    let sum = 0;
+    $('#localSalesBody .ls-total-cell').each(function () {
+        sum += parseFloat($(this).text().replace(/[^\d.-]/g, '')) || 0;
+    });
+    return sum;
+}
+
+// ONE global instance
+window.summaryChart = window.summaryChart || null;
+
+function ensureSummaryChart() {
+    const canvas = document.getElementById('summaryChart');
+    if (!canvas || typeof Chart === 'undefined') return null;
+
+    if (window.summaryChart && typeof window.summaryChart.update === 'function') return window.summaryChart;
+
+    const ctx = canvas.getContext('2d');
+    window.summaryChart = new Chart(ctx, {
         type: 'bar',
         data: {
             labels: ['Cash In', 'Cash Out', 'Profit'],
             datasets: [{
-                label: 'Amount (AED)',
-                data: [cashIn, cashOut, profit],
-                backgroundColor: ['#28a745', '#dc3545', '#007bff']
+                label: 'AED',
+                data: [0, 0, 0], // start at baseline
+                backgroundColor: ['#22c55e', '#ef4444', '#3b82f6'],
+                hoverBackgroundColor: ['#16a34a', '#dc2626', '#2563eb'],
+                borderColor: ['#16a34a', '#dc2626', '#2563eb'],
+                borderWidth: 1,
+                categoryPercentage: 0.95,
+                barPercentage: 0.9,
+                barThickness: 92,
+                maxBarThickness: 120,
+                borderRadius: 10
             }]
         },
         options: {
             responsive: true,
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    min: 0,
-                    ticks: {
-                        callback: value => `AED ${value}`
+            maintainAspectRatio: false,
+            animation: false, // we control animations on update
+            plugins: {
+                legend: { display: true, position: 'top' },
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => 'AED ' + (ctx.parsed.y || 0)
+                            .toLocaleString(undefined, { minimumFractionDigits: 2 })
                     }
                 }
+            },
+            scales: {
+                y: { ticks: { callback: v => 'AED ' + Number(v).toLocaleString() }, grid: { color: 'rgba(0,0,0,0.06)' } },
+                x: { grid: { display: false } }
             }
         }
     });
+    return window.summaryChart;
+}
+
+let _chartDebounce;
+let _chartIntroPlayed = false;   // only one true bottom→top intro
+let _chartPendingTarget = null;
+
+function scheduleChartUpdate(cashIn, cashOut, profit, fromZeroOnce = false) {
+    _chartPendingTarget = [cashIn, cashOut, profit];
+
+    // ignore early calls until we explicitly run the intro
+    if (!_chartIntroPlayed && !fromZeroOnce) return;
+
+    clearTimeout(_chartDebounce);
+    _chartDebounce = setTimeout(() => {
+        const ch = ensureSummaryChart();
+        if (!ch) return;
+
+        const target = _chartPendingTarget || [cashIn, cashOut, profit];
+
+        // ---- ONE-TIME INTRO (bottom → top) ----
+        if (fromZeroOnce && !_chartIntroPlayed) {
+            _chartIntroPlayed = true;
+
+            // IMPORTANT: animate bars from the baseline (y=0) pixel
+            const fromBase = (ctx) => ctx.chart.scales.y.getPixelForValue(0);
+
+            // don’t set data to zeros first (that causes extra flicker)
+            ch.options.animation = { duration: 900, easing: 'easeOutCubic' };
+            ch.options.animations = {
+                y: { type: 'number', from: fromBase, duration: 900, easing: 'easeOutCubic' }, // top edge
+                base: { type: 'number', from: fromBase, duration: 900, easing: 'easeOutCubic' }  // bottom edge
+            };
+            ch.data.datasets[0].data = target;
+            ch.update();
+            return;
+        }
+
+        // ---- NORMAL UPDATES (no flicker) ----
+        ch.options.animation = { duration: 400, easing: 'easeOutCubic' };
+        ch.options.animations = { y: { duration: 400 }, base: { duration: 400 } };
+        ch.data.datasets[0].data = target;
+        ch.update();
+    }, 120);
 }
 
 function updateCashInBreakdown(data) {
@@ -5572,94 +2125,120 @@ function updateCashInBreakdown(data) {
     });
 }
 
+// --- one-time skeleton for Cash In cards (fixed order) ---
+function ensureCashInSkeleton() {
+    if (window.__ciSkeletonReady) return;
+    window.__ciSkeletonReady = true;
+
+    const $grid = $('#cashInBreakdownGrid');
+    if (!$grid.length) return;
+
+    const mk = (key, label) => `
+    <div id="ci-card-${key}" class="bg-white rounded-2xl shadow p-5 border hover:shadow-md transition">
+      <div class="text-sm text-gray-500 mb-1">${label}</div>
+      <div class="text-lg font-semibold mb-3 ci-total">AED 0.00</div>
+      <div class="space-y-1 text-sm">
+        <div class="flex items-center justify-between">
+          <span class="text-gray-600">Total Material</span>
+          <span class="font-medium ci-material">AED 0.00</span>
+        </div>
+        <div class="flex items-center justify-between ci-ship-row">
+          <span class="text-gray-600">Total Shipping Cost</span>
+          <span class="font-medium ci-shipping">AED 0.00</span>
+        </div>
+      </div>
+    </div>`;
+
+    $grid.html(
+        mk('us', 'US Client Payment') +
+        mk('sq', 'SQ Sheet') +
+        mk('local', 'Local Sales (incl VAT)') +
+        mk('customer', 'Customer Sheets')
+    );
+}
+
+function updateCashInCard(key, material = 0, shipping = 0, hasShipping = true) {
+    const $card = $(`#ci-card-${key}`);
+    if (!$card.length) return;
+
+    material = Number(material) || 0;
+    shipping = Number(shipping) || 0;
+    const shipVal = hasShipping ? shipping : 0;
+    const total = material + shipVal;
+
+    $card.find('.ci-total').text(fmtAED(total));
+    $card.find('.ci-material').text(fmtAED(material));
+    $card.find('.ci-shipping').text(fmtAED(shipping));
+    $card.find('.ci-ship-row').toggle(hasShipping);
+}
+
+let _cashInBuildSeq = 0;
+let _ciSeeded = false;
+let _ciLast = null;
+
 function loadCashInBreakdown() {
-    $.ajax({
-        url: '/summary/cash-in-breakdown',
-        method: 'GET',
-        dataType: 'json',
-        success: function (data) {
-            let totalMaterial = 0;
-            let totalShipping = 0;
-            let grandTotal = 0;
-            let $tbody = $('#cashInBreakdownTable');
-            $tbody.empty();
+    if (!$('#sheet-summary').is(':visible')) return;
 
-            data.forEach(function (row) {
-                const material = parseFloat(row.material);
-                const shipping = parseFloat(row.shipping);
-                const total = parseFloat(row.total);
+    ensureCashInSkeleton();           // cards exist, stays stable
+    const seq = ++_cashInBuildSeq;
 
-                totalMaterial += material;
-                totalShipping += shipping;
-                grandTotal += total;
+    // --- 1) Seed ONCE, then never clear to zeros again ---
+    if (!_ciSeeded) {
+        const usSeed = (getUsCached() ?? getNum('#us-total-amount') ?? 0);
+        const sqSeed = (getSqCached() ?? 0);
+        const localSeed = (getLocalSalesCached() ?? 0);
+        const seed = {
+            us: { name: 'US Client Payment', material: Number(usSeed) || 0, hasShipping: false },
+            sq: { name: 'SQ Sheet', material: Number(sqSeed) || 0, hasShipping: false },
+            local: { name: 'Local Sales', material: Number(localSeed) || 0, hasShipping: false },
+            customer: { name: 'Customer Sheets', material: 0, shipping: 0, hasShipping: true },
+        };
+        _ciLast = seed;
+        renderCashInBreakdown(seed);
+        _ciSeeded = true;
+    } else if (_ciLast) {
+        // keep showing last values during the fetch (no flicker)
+        renderCashInBreakdown(_ciLast);
+    }
 
-                let $tr = $('<tr>');
-                $tr.append(`<td>${row.sheet}</td>`);
-                $tr.append(`<td>AED ${material.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>`);
-                $tr.append(`<td>AED ${shipping.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>`);
-                $tr.append(`<td>AED ${total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>`);
-                $tbody.append($tr);
+    // --- 2) Fetch real numbers in parallel (include US now) ---
+    const localCached = getLocalSalesCached();
+    const sqCached = getSqCached();
+    const usCached = getUsCached();
+
+    const localP = (localCached != null) ? $.Deferred().resolve(localCached).promise()
+        : fetchLocalSalesTotal();
+    const sqP = (sqCached != null) ? $.Deferred().resolve(sqCached).promise()
+        : fetchSqTotal();
+    const usP = (usCached != null) ? $.Deferred().resolve(usCached).promise()
+        : fetchUsTotal();
+    const custP = fetchCustomerSheetsTotals();   // { material, shipping }
+
+    $.when(usP, sqP, localP, custP).done(function (usAmt, sqAmt, localAmt, custTotalsArg) {
+        if (seq !== _cashInBuildSeq) return; // drop stale result
+
+        const ct = Array.isArray(custTotalsArg) ? (custTotalsArg[0] || {}) : (custTotalsArg || {});
+        const finalData = {
+            us: { name: 'US Client Payment', material: Number(usAmt) || 0, hasShipping: false },
+            sq: { name: 'SQ Sheet', material: Number(sqAmt) || 0, hasShipping: false },
+            local: { name: 'Local Sales', material: Number(localAmt) || 0, hasShipping: false },
+            customer: { name: 'Customer Sheets', material: Number(ct.material) || 0, shipping: Number(ct.shipping) || 0, hasShipping: true },
+        };
+
+        _ciLast = finalData;                 // remember last good values
+        renderCashInBreakdown(finalData);    // single solid update
+
+        // (Optional) table under cards
+        fetchCustomerSheetsRows()
+            .done(res => {
+                if (seq !== _cashInBuildSeq) return;
+                const rows = Array.isArray(res?.rows) ? res.rows : [];
+                renderCustomerSheetsTable(rows.length ? rows : collectCustomerSheetsRowsFromDOM());
+            })
+            .fail(() => {
+                if (seq !== _cashInBuildSeq) return;
+                renderCustomerSheetsTable(collectCustomerSheetsRowsFromDOM());
             });
-
-            // Add Grand Total row
-            let $totalRow = $(`
-                <tr class="table-success fw-bold">
-                    <td colspan="3" class="text-end">Grand Total:</td>
-                    <td>AED ${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                </tr>
-            `);
-            $tbody.append($totalRow);
-
-            // Update summary totals above table
-            $('#cashInAmount').text('AED ' + grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 }));
-
-            // Calculate Cash Out
-            const cashOut = cachedCashOut;
-
-            // Calculate Profit (Cash In - Cash Out)
-            const profit = grandTotal - cashOut;
-
-            // Update Profit card
-            $('#profitAmount').text('AED ' + profit.toLocaleString(undefined, { minimumFractionDigits: 2 }));
-            updateProfitBreakdown(profit);
-
-            // Update the chart
-            if (summaryChart) {
-                summaryChart.data.datasets[0].data = [
-                    grandTotal,  // Cash In
-                    cashOut,     // Cash Out
-                    profit       // Profit
-                ];
-                summaryChart.update();
-            } else {
-                const ctx = document.getElementById('summaryChart').getContext('2d');
-                summaryChart = new Chart(ctx, {
-                    type: 'bar',
-                    data: {
-                        labels: ['Cash In', 'Cash Out', 'Profit'],
-                        datasets: [{
-                            label: 'Amount (AED)',
-                            data: [grandTotal, cashOut, profit],
-                            backgroundColor: ['#28a745', '#dc3545', '#007bff']
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        scales: {
-                            y: {
-                                beginAtZero: true,
-                                ticks: {
-                                    callback: value => `AED ${value}`
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-        },
-        error: function (xhr, status, error) {
-            console.error('Error loading cash-in breakdown:', error);
-        }
     });
 }
 
@@ -5672,4 +2251,1166 @@ function updateProfitBreakdown(profit) {
     $('#charityAmount').text('AED ' + charity.toLocaleString(undefined, { minimumFractionDigits: 2 }));
     $('#shareholder1Amount').text('AED ' + shareholder1.toLocaleString(undefined, { minimumFractionDigits: 2 }));
     $('#shareholder2Amount').text('AED ' + shareholder2.toLocaleString(undefined, { minimumFractionDigits: 2 }));
+}
+
+let summaryInited = false;
+
+function initSummaryLogic() {
+    if (summaryInited) return;      // prevent multiple binds
+    summaryInited = true;
+
+    // Create new customer sheet modal handlers
+    $('#openCreateCustomerModalBtn').off('click.createSheet')
+        .on('click.createSheet', function () {
+            $('#createCustomerSheetModal').removeClass('hidden').addClass('flex');
+        });
+
+    $('#cancelCustomerSheetModalBtn').off('click.createSheet')
+        .on('click.createSheet', function () {
+            $('#createCustomerSheetModal').addClass('hidden').removeClass('flex');
+        });
+
+    // Create Customer Sheet (idempotent)
+    $('#createCustomerSheetForm')
+        .off('submit.createSheet')
+        .on('submit.createSheet', function (e) {
+            e.preventDefault();
+
+            if (window._creatingSheet) return;     // guard: avoid double submit
+            window._creatingSheet = true;
+
+            const sheetName = ($('#newCustomerSheetName').val() || '').trim();
+            if (!sheetName) { window._creatingSheet = false; return; }
+
+            $.ajax({
+                url: '/customer/sheets/create',       // local server path
+                method: 'POST',
+                headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') },
+                data: { sheet_name: sheetName }
+            })
+                .done(function (res) {
+                    if (!res?.success || !res?.data) {
+                        alert(res?.message || 'Failed to create sheet');
+                        return;
+                    }
+
+                    const dbId = res.data.id;
+                    const slug = res.data.slug;
+                    const name = res.data.sheet_name;
+                    const domId = `customer-${slug}`;
+
+                    // Remove any previous instances (defensive)
+                    $(`#customerTabsContainer .sheet-tab[data-sheet="${domId}"]`).remove();
+                    $(`#sheet-${domId}`).remove();
+
+                    // Create ONE bottom tab
+                    $('#customerTabsContainer').append(
+                        `<button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100"
+                 data-sheet="${domId}">${name}</button>`
+                    );
+
+                    // Build the sheet section (make sure this helper does NOT add another tab)
+                    if (typeof window.addCustomerSheetUI === 'function') {
+                        window.addCustomerSheetUI({ id: dbId, name, slug });
+                    } else {
+                        // Minimal fallback scaffold (unique hidden id!)
+                        $('#sheetContainer').append(`
+          <div id="sheet-${domId}" class="sheet-section hidden">
+            <input type="hidden" id="customer-sheet-id-${dbId}" class="customer-sheet-id" value="${dbId}">
+            <h2 class="text-xl font-bold mb-4">Customer Sheet: ${name}</h2>
+          </div>
+        `);
+                    }
+
+                    // Safety: kill any dup tabs if some other code also appended one
+                    const seen = new Set();
+                    $('#customerTabsContainer .sheet-tab').each(function () {
+                        const key = $(this).data('sheet');
+                        if (seen.has(key)) $(this).remove();
+                        else seen.add(key);
+                    });
+
+                    // Close modal & reset
+                    $('#createCustomerSheetModal').addClass('hidden').removeClass('flex');
+                    $('#newCustomerSheetName').val('');
+
+                    // Activate the new tab (triggers your existing .sheet-tab click logic)
+                    localStorage.setItem('activeSheet', domId);
+                    $(`.sheet-tab[data-sheet="${domId}"]`).trigger('click');
+                })
+                .fail(function (xhr) {
+                    alert(xhr.responseJSON?.message || 'Server error creating sheet.');
+                    console.error('Create sheet error:', xhr.responseJSON || xhr);
+                })
+                .always(function () {
+                    window._creatingSheet = false;
+                });
+        });
+}
+
+function renderCashInBreakdown(sources = {}) {
+    ensureCashInSkeleton(); // create fixed cards once
+
+    // Merge with last snapshot so partial calls don't blank cards
+    const prev = window._ciLast || {};
+    const merged = {
+        us: { ...prev.us, ...sources.us },
+        sq: { ...prev.sq, ...sources.sq },
+        local: { ...prev.local, ...sources.local },
+        customer: { hasShipping: true, ...prev.customer, ...sources.customer }
+    };
+    window._ciLast = merged;
+
+    // Paint cards
+    updateCashInCard('us', Number(merged.us?.material) || 0, 0, false);
+    updateCashInCard('sq', Number(merged.sq?.material) || 0, 0, false);
+    updateCashInCard('local', Number(merged.local?.material) || 0, 0, false);
+
+    const c = merged.customer || {};
+    updateCashInCard('customer',
+        Number(c.material) || 0,
+        Number(c.shipping) || 0,
+        c.hasShipping !== false
+    );
+
+    // Totals
+    const grand =
+        (Number(merged.us?.material) || 0) +
+        (Number(merged.sq?.material) || 0) +
+        (Number(merged.local?.material) || 0) +
+        (Number(c.material) || 0) +
+        ((c.hasShipping === false) ? 0 : (Number(c.shipping) || 0));
+
+    $('#cashInGrandTotal').text(fmtAED(grand));
+    $('#cashInAmount').text(fmtAED(grand));
+
+    const cashOut = getNum('#cashOutAmount');
+    const profit = grand - cashOut;
+    $('#profitAmount').text(fmtAED(profit));
+
+    // Chart: run intro on first paint only
+    scheduleChartUpdate(grand, cashOut, profit, !window._chartIntroPlayed);
+
+    // Table
+    renderCashInTable(merged, grand);
+}
+
+// --- Debounced refresher (file-scope) ---
+let _cashInRefreshTimer = null;
+function requestCashInRefresh() {
+    clearTimeout(_cashInRefreshTimer);
+    _cashInRefreshTimer = setTimeout(() => {
+        if ($('#sheet-summary').is(':visible')) loadCashInBreakdown();
+    }, 120);
+}
+
+// --- Bind once ---
+$(function () {
+    $(document)
+        .off('us:totalsUpdated.summary sq:totalsUpdated.summary customerSheets:totalsUpdated.summary localSales:updated.summary')
+        .on('us:totalsUpdated.summary sq:totalsUpdated.summary customerSheets:totalsUpdated.summary localSales:updated.summary', requestCashInRefresh);
+});
+
+// Easing + count-up helper (no flicker, preserves AED format)
+function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
+function animateNumberTo($el, finalValue, { duration = 1000, fromValue = null } = {}) {
+    const start = (fromValue == null) ? (parseFloat(($el.text() || '').replace(/[^\d.-]/g, '')) || 0) : fromValue;
+    const end = Number(finalValue || 0);
+    const delta = end - start;
+    const t0 = performance.now();
+
+    return new Promise(resolve => {
+        function step(now) {
+            const t = Math.min(1, (now - t0) / duration);
+            const v = start + delta * easeOutCubic(t);
+            $el.text(fmtAED(v));
+            if (t < 1) requestAnimationFrame(step); else resolve();
+        }
+        requestAnimationFrame(step);
+    });
+}
+
+function playKpiAnimationOnce() {
+    // If you want “every click”, clear this before calling (see below)
+    if (localStorage.getItem('summaryKpiPlayed') === '1') return Promise.resolve();
+
+    const cashIn = getNum('#cashInAmount');
+    const cashOut = getNum('#cashOutAmount');
+    const profit = getNum('#profitAmount');
+
+    $('#cashInAmount').text(fmtAED(0));
+    $('#cashOutAmount').text(fmtAED(0));
+    $('#profitAmount').text(fmtAED(0));
+
+    return Promise.all([
+        animateNumberTo($('#cashInAmount'), cashIn, { duration: 900, fromValue: 0 }),
+        animateNumberTo($('#cashOutAmount'), cashOut, { duration: 900, fromValue: 0 }),
+        animateNumberTo($('#profitAmount'), profit, { duration: 900, fromValue: 0 })
+    ]).then(() => localStorage.setItem('summaryKpiPlayed', '1'));
+}
+
+function renderCashInTable(cashInSources, precomputedGrand = null) {
+    const $body = $('#cashInTableBody').empty();
+
+    const rows = [];
+    let grand = 0;
+
+    const pushRow = (name, material = 0, shipping = 0, hasShipping = true) => {
+        const m = Number(material || 0);
+        const s = hasShipping === false ? 0 : Number(shipping || 0);
+        const total = m + s;
+        grand += total;
+        rows.push({ name, m, s: hasShipping === false ? 0 : s, total });
+    };
+
+    // If you later provide per-customer lines (e.g., RH/FF/BL/WS)
+    if (Array.isArray(cashInSources.customers)) {
+        cashInSources.customers.forEach(c =>
+            pushRow(c.name || 'Customer', c.material, c.shipping, c.hasShipping)
+        );
+    } else if (cashInSources.customer) {
+        // single aggregated “Customer Sheets”
+        const c = cashInSources.customer;
+        pushRow(c.name || 'Customer Sheets', c.material, c.shipping, c.hasShipping);
+    }
+
+    if (cashInSources.us) {
+        const u = cashInSources.us;
+        pushRow(u.name || 'US Client Payment', u.material, 0, false);
+    }
+    if (cashInSources.sq) {
+        const s = cashInSources.sq;
+        pushRow(s.name || 'SQ Sheet', s.material, 0, false);
+    }
+    if (cashInSources.local) {
+        const l = cashInSources.local;
+        pushRow(l.name || 'Local Sales', l.material, 0, false);
+    }
+
+    // Build rows
+    rows.forEach(r => {
+        $body.append(`
+      <tr>
+        <td class="px-4 py-3 text-gray-700">${r.name}</td>
+        <td class="px-4 py-3 text-right">${fmtAED(r.m)}</td>
+        <td class="px-4 py-3 text-right">${fmtAED(r.s)}</td>
+        <td class="px-4 py-3 text-right font-semibold">${fmtAED(r.total)}</td>
+      </tr>
+    `);
+    });
+
+    // Grand total
+    const gt = precomputedGrand != null ? precomputedGrand : grand;
+    $('#cashInTableGrand').text(fmtAED(gt));
+}
+
+function fetchCustomerSheetsRows() {
+    return $.ajax({
+        url: '/summary/customer-sheets/rows',
+        data: { _t: Date.now() },   // cache-buster
+        dataType: 'json',
+        cache: false
+    }).fail((xhr) => {
+        console.error('rows fetch failed:', xhr.status, xhr.responseText);
+    });
+}
+
+function renderCustomerSheetsTable(rows) {
+    const $body = $('#customerSheetsTableBody').empty();
+    let grand = 0;
+
+    if (!rows || rows.length === 0) {
+        $body.append('<tr><td colspan="4" class="px-4 py-4 text-center text-gray-500">No customer sheets yet.</td></tr>');
+        $('#customerSheetsTableGrand').text('AED 0.00');
+        return;
+    }
+
+    rows.forEach(r => {
+        const m = Number(r.material || 0);
+        const s = Number(r.shipping || 0);
+        const t = m + s; grand += t;
+        $body.append(`
+      <tr>
+        <td class="px-4 py-3 text-gray-700">${r.name}</td>
+        <td class="px-4 py-3 text-right">${fmtAED(m)}</td>
+        <td class="px-4 py-3 text-right">${fmtAED(s)}</td>
+        <td class="px-4 py-3 text-right font-semibold">${fmtAED(t)}</td>
+      </tr>
+    `);
+    });
+
+    $('#customerSheetsTableGrand').text(fmtAED(grand));
+}
+
+function collectCustomerSheetsRowsFromDOM() {
+    const rows = [];
+    // each customer sheet section we created has: <input type="hidden" id="customer-sheet-id" value="...">
+    $('.sheet-section').each(function () {
+        const sid = $(this).find('#customer-sheet-id').val(); // local scope find is OK even if IDs repeat
+        if (!sid) return;
+
+        // Try to get a readable name
+        let name = $(this).find('h2').first().text().replace(/Customer Sheet:\s*/i, '').trim();
+        if (!name) name = `Sheet ${sid}`;
+
+        const material = getNum(`#totalMaterial-${sid}`);
+        const shipping = getNum(`#totalShipping-${sid}`);
+        // Always push (even 0s) so new empty sheets still show
+        rows.push({ name, material, shipping });
+    });
+    return rows;
+}
+
+function ensureKpiStickyBackdrop() {
+    if (window.__kpiStickyBound) return;         // bind once
+    const row = document.getElementById('kpiSticky');
+    if (!row) return;                             // summary not mounted yet
+
+    window.__kpiStickyBound = true;
+
+    const sentinel = document.createElement('div');
+    sentinel.style.height = '1px';
+    row.parentNode.insertBefore(sentinel, row);
+
+    const io = new IntersectionObserver(([entry]) => {
+        const stuck = entry.intersectionRatio === 0;
+        row.classList.toggle('is-stuck', stuck);
+    }, { threshold: [0, 1] });
+
+    io.observe(sentinel);
+}
+
+function renderLoanOutstanding(rows) {
+    // Safe, order-proof aliases
+    const numAE = (window.gtsFmt && window.gtsFmt.numAE)
+        ? window.gtsFmt.numAE
+        : n => (Number(n) || 0).toLocaleString('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    const aed = (window.gtsFmt && window.gtsFmt.aed)
+        ? window.gtsFmt.aed
+        : n => 'AED ' + numAE(n);
+
+    const $sec = $('#loanOutstandingSection');
+    const $body = $('#loanOutstandingBody').empty();
+    $sec.removeClass('hidden');
+
+    let grand = 0;
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+        $body.append(`
+      <tr>
+        <td colspan="2" class="px-4 py-3 text-gray-600">
+           No outstanding balances across customer sheets.
+        </td>
+      </tr>
+    `);
+        $('#loanOutstandingGrand').text(aed(0));
+        return;
+    }
+
+    const positives = rows
+        .map(r => ({ name: r.name, remaining: Number(r.remaining || 0) }))
+        .filter(r => r.remaining > 0)
+        .sort((a, b) => b.remaining - a.remaining);
+
+    if (positives.length === 0) {
+        $body.append(`
+      <tr>
+        <td colspan="2" class="px-4 py-3 text-gray-600">
+           All clear — no outstanding balances across customer sheets.
+        </td>
+      </tr>
+    `);
+        $('#loanOutstandingGrand').text(aed(0));
+        return;
+    }
+
+    positives.forEach(r => {
+        grand += r.remaining;
+        $body.append(`
+      <tr>
+        <td class="px-4 py-3 text-gray-700">${r.name}</td>
+        <td class="px-4 py-3 text-right font-semibold">${numAE(r.remaining)}</td>
+      </tr>
+    `);
+    });
+
+    $('#loanOutstandingGrand').text(aed(grand));
+}
+
+// Read remaining balances already rendered in each customer sheet section
+function collectLoanOutstandingFromDOM() {
+    const rows = [];
+
+    $('.sheet-section').each(function () {
+        const $sec = $(this);
+
+        // 1) Prefer explicit data attribute
+        let name = ($sec.data('sheetName') || $sec.data('sheet-name') || '').toString().trim();
+
+        // 2) Infer from id="sheet-customer-XXXX"
+        if (!name) {
+            const id = $sec.attr('id') || '';
+            const m = id.match(/^sheet-customer-([a-z0-9_-]+)$/i);
+            if (m) name = m[1].toUpperCase();
+        }
+
+        // 3) As LAST resort, only use a heading if it starts with "Customer Sheet:"
+        if (!name) {
+            const h = ($sec.find('h2').first().text() || '').trim();
+            const m2 = h.match(/^Customer Sheet:\s*(.+)$/i);
+            if (m2) name = m2[1].trim();
+        }
+
+        if (!name) name = 'UNKNOWN';
+
+        // Read remaining balance value from the section
+        const $rem = $sec.find('[id^="remainingBalance-"]').first();
+        if (!$rem.length) return;
+
+        const rem = parseFloat(($rem.text() || '').replace(/[^\d.-]/g, '')) || 0;
+        if (rem > 0) rows.push({ name, remaining: rem });
+    });
+
+    rows.sort((a, b) => b.remaining - a.remaining);
+    return rows;
+}
+
+function fetchLoanOutstandingRows() {
+    const url = (window.routes && window.routes.loanOutstanding)
+        || '/summary/customer-sheets/loans'; // fallback
+    return $.ajax({
+        url,
+        data: { _t: Date.now() },
+        dataType: 'json',
+        cache: false
+    }).fail((xhr) => {
+        console.error('loan rows fetch failed:', xhr.status, xhr.responseText);
+    });
+}
+
+function refreshLoanOutstandingHybrid() {
+    fetchLoanOutstandingRows()
+        .done(res => {
+            const apiRows = Array.isArray(res?.rows) ? res.rows : [];
+            if (apiRows.length) {
+                renderLoanOutstanding(apiRows);
+            } else {
+                renderLoanOutstanding(collectLoanOutstandingFromDOM());
+            }
+        })
+        .fail(() => {
+            renderLoanOutstanding(collectLoanOutstandingFromDOM());
+        });
+}
+
+(function (w) {
+    w.gtsFmt = w.gtsFmt || {};
+    if (typeof w.gtsFmt.numAE !== 'function') {
+        w.gtsFmt.numAE = n => (Number(n) || 0).toLocaleString('en-AE', {
+            minimumFractionDigits: 2, maximumFractionDigits: 2
+        });
+    }
+    if (typeof w.gtsFmt.aed !== 'function') {
+        w.gtsFmt.aed = n => 'AED ' + w.gtsFmt.numAE(n);
+    }
+    if (typeof w.gtsFmt.fmtAED !== 'function') {
+        w.gtsFmt.fmtAED = w.gtsFmt.numAE; // numbers-only alias
+    }
+})(window);
+
+function unhideAncestors($el) {
+    $el.parents().each(function () {
+        const $p = $(this);
+        if ($p.css('display') === 'none') $p.css('display', 'block');
+        $p.removeClass('hidden');
+    });
+}
+
+// Beneficiary Sheet Logic
+
+let benInited = false;
+let benFirstPaintDone = false;
+
+function initBenLogic() {
+    if (benInited) return;
+    // Guard: sheet HTML not mounted yet? bail and try again later.
+    // (You can check the wrapper or a specific form. Wrapper is more robust.)
+    if (!document.getElementById('sheet-beneficiary')) return;
+    // or: if (!document.getElementById('benFormSH1')) return;
+
+    benInited = true;
+
+    // Submit handlers (delegated so it works if DOM is re-rendered)
+    $(document)
+        .off('submit.ben', '#benFormSH1')
+        .on('submit.ben', '#benFormSH1', function (e) {
+            e.preventDefault();
+            submitBenForm($(this));
+        });
+
+    $(document)
+        .off('submit.ben', '#benFormSH2')
+        .on('submit.ben', '#benFormSH2', function (e) {
+            e.preventDefault();
+            submitBenForm($(this));
+        });
+
+    // If other sheets fire total updates, refresh profit when this tab is visible
+    $(document)
+        .off('us:totalsUpdated.ben sq:totalsUpdated.ben localSales:updated.ben customerSheets:totalsUpdated.ben')
+        .on('us:totalsUpdated.ben sq:totalsUpdated.ben localSales:updated.ben customerSheets:totalsUpdated.ben', function () {
+            if ($('#sheet-beneficiary').is(':visible')) computeAndRenderProfit();
+        });
+
+    // Edit / Save / Cancel
+    $(document)
+        .off('click.ben', '.ben-edit')
+        .on('click.ben', '.ben-edit', function () {
+            enterBenEdit($(this).closest('tr'));
+        });
+
+    $(document)
+        .off('click.ben', '.ben-cancel')
+        .on('click.ben', '.ben-cancel', function () {
+            cancelBenEdit($(this).closest('tr'));
+        });
+
+    $(document)
+        .off('click.ben', '.ben-save')
+        .on('click.ben', '.ben-save', function () {
+            saveBenEdit($(this).closest('tr'));
+        });
+
+    // Delete → open modal (no alerts)
+    $(document)
+        .off('click.ben', '.ben-del')
+        .on('click.ben', '.ben-del', function () {
+            openBenDeleteModal($(this).closest('tr'));
+        });
+
+    // Modal buttons
+    $(document)
+        .off('click.ben', '#benDelCancel, #benDelClose')
+        .on('click.ben', '#benDelCancel, #benDelClose', closeBenDeleteModal);
+
+    $(document)
+        .off('click.ben', '#benDelConfirm')
+        .on('click.ben', '#benDelConfirm', function () {
+            if (!benDeleteId) return;
+            deleteBenRow(benDeleteId).always(closeBenDeleteModal);
+        });
+
+    $(document)
+        .off('input.benAutosize', '.ben-autosize-num')
+        .on('input.benAutosize', '.ben-autosize-num', function () {
+            benAutosizeNumber(this);
+        });
+
+    // Recompute charity KPI when other totals change (if visible)
+    $(document)
+        .off('us:totalsUpdated.ben2 sq:totalsUpdated.ben2 localSales:updated.ben2 customerSheets:totalsUpdated.ben2')
+        .on('us:totalsUpdated.ben2 sq:totalsUpdated.ben2 localSales:updated.ben2 customerSheets:totalsUpdated.ben2', function () {
+            if ($('#sheet-beneficiary').is(':visible')) computeAndRenderProfit();
+        });
+
+    // First paint: wait for BOTH data + KPIs, then render once
+    $.when(loadBeneficiaries(), computeAndRenderProfit()).done(function () {
+        benRenderAllocTable();      // single, clean initial render (no zero flicker)
+        benFirstPaintDone = true;   // subsequent updates re-render on their own
+    });
+}
+
+// ---------- small helpers ----------
+const benFmtAED = n => 'AED ' + (Number(n) || 0).toLocaleString('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const benEsc = s => String(s ?? '').replace(/</g, '&lt;');
+const pickNum = v => { const n = parseFloat(String(v || '').replace(/[^\d.-]/g, '')); return isNaN(n) ? 0 : n; };
+
+const BEN_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const BEN_WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+function benDate(dStr) {
+    if (!dStr) return '';
+    const d = new Date(dStr);
+    if (isNaN(d)) return dStr;
+    const wk = BEN_WEEKDAYS[d.getDay()];
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mon = BEN_MONTHS[d.getMonth()];
+    return `${wk} ${dd} ${mon} ${d.getFullYear()}`;
+}
+
+// ---------- renderers ----------
+function renderBenTable($tbody, rows) {
+    $tbody.empty();
+    if (!rows || rows.length === 0) {
+        $tbody.append(`<tr><td colspan="7" class="px-4 py-4 text-center text-gray-500">No entries yet.</td></tr>`);
+        return;
+    }
+    rows.forEach((r, i) => {
+        const iso = r.date || ''; // keep raw ISO for editing
+        $tbody.append(`
+      <tr data-id="${r.id}" data-raw-date="${iso}" data-type="${(r.type || '').toLowerCase()}" data-charity="${r.charity || 0}">
+        <td class="px-4 py-3">${i + 1}</td>
+        <td class="px-4 py-3 ben-cell-date">${benEsc(benDate(iso))}</td>
+        <td class="px-4 py-3 ben-cell-type">${benTypeBadge(r.type)}</td>
+        <td class="px-4 py-3 text-right ben-cell-amount">${benFmtAED(Number(r.amount || 0))}</td>
+        <td class="px-4 py-3 text-right ben-cell-charity">${benFmtAED(Number(r.charity || 0))}</td>
+        <td class="px-4 py-3 ben-cell-remark">${benEsc(r.remarks || '')}</td>
+        <td class="px-4 py-3 text-center">
+          <div class="flex items-center justify-center gap-2">
+            <button class="ben-edit p-1 rounded text-green-600 hover:bg-gray-100" title="Edit"><i class="bi bi-pencil-square"></i></button>
+            <button class="ben-save p-1 rounded bg-green-600 hover:bg-green-700 text-white hidden" title="Save"><i class="bi bi-check2"></i></button>
+            <button class="ben-cancel p-1 rounded bg-gray-600 hover:bg-gray-700 text-white hidden" title="Cancel"><i class="bi bi-x-lg"></i></button>
+            <button class="ben-del p-1 rounded hover:bg-red-50 text-red-600" title="Delete"><i class="bi bi-trash"></i></button>
+          </div>
+        </td>
+      </tr>
+    `);
+    });
+}
+
+// ---------- data loads (beneficiaries) ----------
+function loadBeneficiaries() {
+    return $.getJSON('/beneficiaries/data', { _t: Date.now() }).done(data => {
+        renderBenTable($('#benBodySH1'), data?.shareholder1?.rows || []);
+        renderBenTable($('#benBodySH2'), data?.shareholder2?.rows || []);
+
+        // Entries totals (sum of Amount column for each shareholder)
+        const sh1EntriesTotal =
+            (data && data.shareholder1 && typeof data.shareholder1.total === 'number')
+                ? data.shareholder1.total
+                : (data?.shareholder1?.rows || []).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+
+        const sh2EntriesTotal =
+            (data && data.shareholder2 && typeof data.shareholder2.total === 'number')
+                ? data.shareholder2.total
+                : (data?.shareholder2?.rows || []).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+
+        $('#benSH1EntriesTotal').text(benFmtAED(sh1EntriesTotal));
+        $('#benSH2EntriesTotal').text(benFmtAED(sh2EntriesTotal));
+
+        const sh1CharityTotal =
+            (data?.shareholder1?.rows || []).reduce((s, r) => s + (Number(r.charity) || 0), 0);
+        const sh2CharityTotal =
+            (data?.shareholder2?.rows || []).reduce((s, r) => s + (Number(r.charity) || 0), 0);
+
+        $('#benSH1CharityTotal').text(benFmtAED(sh1CharityTotal));
+        $('#benSH2CharityTotal').text(benFmtAED(sh2CharityTotal));
+
+        $(document).trigger('beneficiaries:updated');
+        if (benFirstPaintDone) benRenderAllocTable(); // render later updates only
+    });
+}
+
+function submitBenForm($form) {
+    const fd = $form.serialize();
+    return $.ajax({
+        url: '/beneficiaries',
+        method: 'POST',
+        headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') },
+        data: fd
+    }).done(() => {
+        $form[0].reset();
+        loadBeneficiaries();
+        computeAndRenderProfit(); // optional: profit might depend on payouts, keep fresh
+    }).fail(xhr => {
+        alert(xhr?.responseJSON?.message || 'Failed to add entry');
+    });
+}
+
+let benDeleteId = null;
+
+function openBenDeleteModal($tr) {
+    benDeleteId = $tr.data('id');
+    $('#benDelDate').text($tr.find('.ben-cell-date').text().trim());
+    $('#benDelAmount').text($tr.find('.ben-cell-amount').text().trim());
+    $('#benDelRemark').text($tr.find('.ben-cell-remark').text().trim());
+    $('#benDeleteModal').removeClass('hidden').addClass('flex');
+}
+
+function closeBenDeleteModal() {
+    benDeleteId = null;
+    $('#benDeleteModal').addClass('hidden').removeClass('flex');
+}
+
+function deleteBenRow(id) {
+    return $.ajax({
+        url: '/beneficiaries/' + id,
+        method: 'DELETE',
+        headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
+    }).done(() => {
+        loadBeneficiaries();
+        computeAndRenderProfit();
+    }).fail(() => alert('Failed to delete entry.'));
+}
+
+function enterBenEdit($tr) {
+    if ($tr.data('editing')) return;
+    $tr.data('editing', 1);
+
+    const rawDate = $tr.data('rawDate'); // jQuery maps data-raw-date -> rawDate
+    const amount = pickNum($tr.find('.ben-cell-amount').text());
+    const charity = Number($tr.data('charity') || 0);
+    const remarks = $tr.find('.ben-cell-remark').text().trim();
+    const type = ($tr.data('type') || '').toLowerCase();
+
+    $tr.find('.ben-cell-date').html(
+        `<input type="date" class="ben-edit-date w-auto border rounded-xl px-3 py-2
+                              focus:border-blue-500 focus:ring-2 focus:ring-blue-200" style="min-width:16ch" value="${rawDate || ''}">`
+    );
+
+    // modern dropdown in edit cell
+    $tr.find('.ben-cell-type').html(benTypeFieldHtml(type, 'ben-edit-type'));
+    hydrateBenSelect($tr);  // set label & highlight
+
+    // amount — auto width based on value length
+    const amountStr = Number.isFinite(amount) ? amount.toFixed(2) : String(amount || 0);
+    const amountCh = Math.max(18, amountStr.length + 4);
+    $tr.find('.ben-cell-amount').html(
+        `<input type="number" step="0.01" inputmode="decimal"
+            class="ben-edit-amount ben-autosize-num w-autol border rounded-xl px-3 py-2 text-right
+                   focus:border-blue-500 focus:ring-2 focus:ring-blue-200" style="width:${amountCh}ch" value="${amountStr}">`
+    );
+
+    // charity — auto width based on value length
+    const charityStr = Number.isFinite(charity) ? charity.toFixed(2) : String(charity || 0);
+    const charityCh = Math.max(16, charityStr.length + 4);
+    $tr.find('.ben-cell-charity').html(
+        `<input type="number" step="0.01" inputmode="decimal"
+        class="ben-edit-charity ben-autosize-num w-auto border rounded-xl px-3 py-2 text-right
+                focus:border-blue-500 focus:ring-2 focus:ring-blue-200" style="width:${charityCh}ch" value="${charityStr}">`
+    );
+
+    $tr.find('.ben-cell-remark').html(
+        `<input type="text"
+            class="ben-edit-remarks w-full border rounded-xl px-3 py-2
+                   focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+            value="${benEsc(remarks).replace(/"/g, '&quot;')}">`
+    );
+
+    $tr.find('.ben-edit, .ben-del').addClass('hidden');
+    $tr.find('.ben-save, .ben-cancel').removeClass('hidden');
+}
+
+// autosize number inputs as user types
+function benAutosizeNumber(el) {
+  const base = parseInt(el.getAttribute('data-basech') || '16', 10);
+  const v = (el.value || '').toString();
+  const ch = Math.max(base, v.length + 4);   // a bit of padding
+  el.style.width = ch + 'ch';
+}
+
+function cancelBenEdit($tr) {
+    // simplest: reload the list to restore view state
+    $tr.data('editing', 0);
+    loadBeneficiaries();
+}
+
+function saveBenEdit($tr) {
+    const id = $tr.data('id');
+    const payload = {
+        date: ($tr.find('.ben-edit-date').val() || '').trim(),
+        type: ($tr.find('.ben-edit-type input[name="type"]').val() || 'cash'),
+        amount: Number($tr.find('.ben-edit-amount').val() || 0),
+        charity: Number($tr.find('.ben-edit-charity').val() || 0),
+        remarks: ($tr.find('.ben-edit-remarks').val() || '').trim(),
+    };
+
+    return $.ajax({
+        url: '/beneficiaries/' + id,
+        method: 'PUT',
+        data: payload,
+        headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
+    }).done(() => {
+        $tr.data('editing', 0);
+        loadBeneficiaries();
+        computeAndRenderProfit();
+    }).fail(xhr => {
+        // keep inline; no alert requested — you can show a subtle error if you want
+        console.error('Update failed', xhr?.responseJSON || xhr);
+    });
+}
+
+// ---------- totals for Profit (fast with cache, with API fallbacks) ----------
+function getLocalSalesCached() {
+    try {
+        const v = localStorage.getItem('localSalesTotal');
+        return v !== null ? (Number(v) || 0) : null;
+    } catch { return null; }
+}
+
+function fetchCashOutTotals() {
+    // summary-data returns total_purchase_of_material + total_shipping_cost
+    return $.getJSON('/summary-data').then(d => ({
+        material: Number(d?.total_purchase_of_material || 0),
+        shipping: Number(d?.total_shipping_cost || 0)
+    })).catch(() => ({ material: 0, shipping: 0 }));
+}
+
+function fetchCustomerSheetsTotals() {
+    return $.getJSON('summary/customer-sheets/totals', { _t: Date.now() })
+        .then(d => ({
+            material: Number(d?.material || 0),
+            shipping: Number(d?.shipping || 0)
+        }))
+        .catch(() => ({ material: 0, shipping: 0 }));
+}
+
+function getUsCached() {
+    // if you cache US somewhere else, read here; otherwise null
+    try {
+        const raw = localStorage.getItem('usTotal');
+        if (raw != null) return pickNum(raw);
+    } catch { }
+    return null;
+}
+function fetchUsTotal() {
+    // falls back to existing endpoint that includes totalAmount
+    return $.getJSON('/us-client/data')
+        .then(d => Number(d?.totalAmount) || 0).catch(() => 0);
+}
+
+// Compute and render Total Profit (Cash In - Cash Out)
+function computeAndRenderProfit() {
+    // cashOut: prefer cached gtsTotals
+    const gts = getGtsTotalsFromStorage();
+    const cashOutPromise = (gts)
+        ? $.Deferred().resolve({ material: gts.material, shipping: gts.shipping }).promise()
+        : fetchCashOutTotals();
+
+    // cashIn parts: local, sq, us, customer sheets
+    const localCached = getLocalSalesCached();
+    const localP = (localCached !== null) ? $.Deferred().resolve(localCached).promise() : fetchLocalSalesTotal();
+
+    const sqCached = getSqCached();
+    const sqP = (sqCached !== null) ? $.Deferred().resolve(sqCached).promise() : fetchSqTotal();
+
+    const usCached = getUsCached();
+    const usP = (usCached !== null) ? $.Deferred().resolve(usCached).promise() : fetchUsTotal();
+
+    const custP = fetchCustomerSheetsTotals(); // {material, shipping}
+
+    $.when(cashOutPromise, localP, sqP, usP, custP).done(function (co, localAmt, sqAmt, usAmt, cust) {
+        const cashOut = Number(co.material || 0) + Number(co.shipping || 0);
+        const customerIn = Number(cust.material || 0) + Number(cust.shipping || 0);
+        const cashIn = Number(localAmt || 0) + Number(sqAmt || 0) + Number(usAmt || 0) + customerIn;
+        const profit = cashIn - cashOut;
+
+        // cache US (nice-to-have)
+        try {
+            localStorage.setItem('usTotal', String(Number(usAmt || 0)));
+        } catch { }
+
+        $('#benTotalProfit').text(benFmtAED(profit));
+
+        // Charity is 5% of profit
+        const charityValue = Math.max(0, profit * 0.05);
+        $('#benCharityKpi').text(benFmtAED(charityValue));
+
+        // Each shareholder gets (profit - charity)/2
+        const eachShare = Math.max(0, (profit - charityValue) / 2);
+
+        // Top cards
+        $('#benSH1Balance').text(benFmtAED(eachShare));
+        $('#benSH2Balance').text(benFmtAED(eachShare));
+
+        // Inline blocks under the add buttons
+        $('#benSH1InlineBalance').text(benFmtAED(eachShare));
+        $('#benSH2InlineBalance').text(benFmtAED(eachShare));
+
+        if (benFirstPaintDone) benRenderAllocTable();
+        renderBenPieChart();
+    });
+}
+
+// === Allocation model (percent only; allocated comes from KPIs) ===
+const BEN_ALLOC = {
+    sh1: { label: 'Shareholder 1', percent: 47.5 },
+    sh2: { label: 'Shareholder 2', percent: 47.5 },
+    charity: { label: 'Charity', percent: 5 },
+};
+
+// Row color classes (file scope)
+const BEN_ROW_CLASSES = {
+    sh1: 'bg-amber-50 hover:bg-amber-100/60',
+    sh2: 'bg-violet-50 hover:bg-violet-100/60',
+    charity: 'bg-emerald-50 hover:bg-emerald-100/60',
+};
+
+function benRenderAllocTable() {
+    const $body = $('#benAllocBody');
+    if (!$body.length) return;
+    $body.empty();
+
+    const parseAED = (t) => parseFloat(String(t || '').replace(/[^\d.-]/g, '')) || 0;
+    const txt = (sel) => ($(sel).length ? $(sel).text() : '');
+    const fmt = benFmtAED;
+
+    // Allocated (from KPI cards)
+    const sh1Allocated = parseAED(txt('#benSH1Balance'));
+    const sh2Allocated = parseAED(txt('#benSH2Balance'));
+    const charityAllocated = parseAED(txt('#benCharityKpi')); // full 5%
+
+    // Withdrawn (derived from tables)
+    const sh1Withdrawn = parseAED(txt('#benSH1EntriesTotal'));
+    const sh2Withdrawn = parseAED(txt('#benSH2EntriesTotal'));
+
+    // Charity withdrawn = SH1 charity total + SH2 charity total
+    let ch1 = parseAED(txt('#benSH1CharityTotal'));
+    if (!ch1) {
+        ch1 = 0;
+        $('#benBodySH1 .ben-cell-charity').each(function () { ch1 += parseAED($(this).text()); });
+    }
+    let ch2 = parseAED(txt('#benSH2CharityTotal'));
+    if (!ch2) {
+        ch2 = 0;
+        $('#benBodySH2 .ben-cell-charity').each(function () { ch2 += parseAED($(this).text()); });
+    }
+    const charityWithdrawn = ch1 + ch2;
+
+    const rowCls = (k) => BEN_ROW_CLASSES[k] || '';
+    const mkRow = (label, percent, allocated, withdrawn, cls = '') => {
+        const balance = (allocated || 0) - (withdrawn || 0);
+        const balCls = balance < 0 ? 'text-red-600' : 'text-gray-800';
+        return `
+      <tr class="${cls}">
+        <td class="px-4 py-3">${label}</td>
+        <td class="px-4 py-3 text-right">${percent}%</td>
+        <td class="px-4 py-3 text-right">${fmt(allocated)}</td>
+        <td class="px-4 py-3 text-right">${fmt(withdrawn)}</td>
+        <td class="px-4 py-3 text-right ${balCls}">${fmt(balance)}</td>
+      </tr>`;
+    };
+
+    // Final 3 rows
+    $body.append(mkRow('Shareholder 1', 47.5, sh1Allocated, sh1Withdrawn, rowCls('sh1')));
+    $body.append(mkRow('Shareholder 2', 47.5, sh2Allocated, sh2Withdrawn, rowCls('sh2')));
+    $body.append(mkRow('Charity', 5, charityAllocated, charityWithdrawn, rowCls('charity')));
+}
+
+function benTypeLabel(t) {
+    switch ((t || '').toLowerCase()) {
+        case 'cash': return 'Cash';
+        case 'bank_transfer': return 'Bank transfer';
+        case 'adjustment': return 'Adjustment';
+        default: return '—';
+    }
+}
+
+function benTypeBadge(t) {
+    const map = {
+        cash: 'bg-yellow-100 text-yellow-800',
+        bank_transfer: 'bg-blue-100 text-blue-800',
+        adjustment: 'bg-purple-100 text-purple-800'
+    };
+    const cls = map[(t || '').toLowerCase()] || 'bg-gray-100 text-gray-800';
+    return `<span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${cls}">${benTypeLabel(t)}</span>`;
+}
+
+// Build the same modern dropdown for inline edit cells
+function benTypeFieldHtml(value = 'cash', extraClass = '') {
+    return `
+    <div class="ben-select ${extraClass} relative" data-name="type">
+      <input type="hidden" name="type" value="${(value || 'cash')}">
+      <button type="button"
+              class="ben-sel-btn w-full rounded-xl border border-gray-300 bg-white py-2.5 pl-3 pr-10
+                     text-gray-800 shadow-sm text-left
+                     focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200">
+        <span class="ben-sel-label"></span>
+        <svg class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500"
+             viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+          <path fill-rule="evenodd"
+                d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z"
+                clip-rule="evenodd" />
+        </svg>
+      </button>
+      <div class="ben-sel-menu hidden absolute z-20 mt-1 w-full rounded-xl border border-gray-200 bg-white shadow-lg">
+        <button type="button" class="ben-sel-opt w-full px-3 py-2 text-left hover:bg-gray-50" data-value="cash">Cash</button>
+        <button type="button" class="ben-sel-opt w-full px-3 py-2 text-left hover:bg-gray-50" data-value="bank_transfer">Bank transfer</button>
+        <button type="button" class="ben-sel-opt w-full px-3 py-2 text-left hover:bg-gray-50" data-value="adjustment">Adjustment</button>
+      </div>
+    </div>`;
+}
+
+// Hydrate labels & active option
+function hydrateBenSelect(root = document) {
+    $('.ben-select', root).each(function () {
+        const $sel = $(this);
+        const val = $sel.find('input[type="hidden"]').val() || 'cash';
+        const $opt = $sel.find(`.ben-sel-opt[data-value="${val}"]`);
+        $sel.find('.ben-sel-label').text($opt.text().trim() || 'Select');
+        $sel.find('.ben-sel-opt').removeClass('bg-gray-100');
+        $opt.addClass('bg-gray-100');
+    });
+}
+
+// Bind once (delegated)
+(function bindBenSelectOnce() {
+    if (window.__benSelectBound) return;
+    window.__benSelectBound = true;
+
+    // Toggle menu
+    $(document).on('click', '.ben-sel-btn', function (e) {
+        e.stopPropagation();
+        const $sel = $(this).closest('.ben-select');
+        $('.ben-select.open').not($sel).removeClass('open').find('.ben-sel-menu').addClass('hidden');
+        $sel.toggleClass('open');
+        $sel.find('.ben-sel-menu').toggleClass('hidden');
+    });
+
+    // Pick option
+    $(document).on('click', '.ben-sel-opt', function () {
+        const $opt = $(this);
+        const $sel = $opt.closest('.ben-select');
+        const val = $opt.data('value');
+        const label = $opt.text().trim();
+
+        $sel.find('input[type="hidden"]').val(val).trigger('change');
+        $sel.find('.ben-sel-label').text(label);
+        $sel.find('.ben-sel-opt').removeClass('bg-gray-100');
+        $opt.addClass('bg-gray-100');
+
+        $sel.removeClass('open');
+        $sel.find('.ben-sel-menu').addClass('hidden');
+    });
+
+    // Close on outside click
+    $(document).on('click', function () {
+        $('.ben-select.open').removeClass('open').find('.ben-sel-menu').addClass('hidden');
+    });
+
+    // Initial hydration on page load
+    $(function () { hydrateBenSelect(document); });
+})();
+
+function ensureApexCharts(cb) {
+    if (window.ApexCharts) return cb();
+    let s = document.getElementById('apexcharts-cdn');
+    if (!s) {
+        s = document.createElement('script');
+        s.id = 'apexcharts-cdn';
+        s.src = 'https://cdn.jsdelivr.net/npm/apexcharts';
+        document.head.appendChild(s);
+    }
+    s.addEventListener('load', () => cb());
+    s.addEventListener('error', () => {
+        console.warn('ApexCharts failed to load.');
+        cb(false);
+    });
+}
+
+function renderBenPieChart() {
+    const $wrap = $('#benPieWrap');
+    if (!$wrap.length) return;
+    if (!$('#sheet-beneficiary').is(':visible')) return;
+
+    const sh1 = pickNum($('#benSH1Balance').text());
+    const sh2 = pickNum($('#benSH2Balance').text());
+    const charity = pickNum($('#benCharityKpi').text());
+
+    const series = [sh1, sh2, charity];
+    const hasData = series.some(v => v > 0);
+
+    ensureApexCharts(() => {
+        if (!window.ApexCharts) return;
+
+        // If a chart exists, just update it (no flicker).
+        if (window.__benPie) {
+            if (hasData) {
+                window.__benPie.updateSeries(series, true);
+            }
+            return;
+        }
+
+        // No chart yet: only create it once we have real data (prevents first-paint flicker).
+        if (!hasData) return;
+
+        if (!$wrap.find('#benPie').length) {
+            $wrap.append('<div id="benPie" class="w-full h-[260px]"></div>');
+        }
+
+        const options = {
+            chart: { type: 'pie', height: 260, toolbar: { show: false }, animations: { enabled: true } },
+            series,
+            labels: ['Shareholder 1', 'Shareholder 2', 'Charity'],
+            legend: { position: 'bottom' },
+            dataLabels: { enabled: true, formatter: (val) => `${val.toFixed(1)}%` },
+            colors: ['#F59E0B', '#8B5CF6', '#10B981'], // amber, violet, emerald
+            stroke: { width: 0 },
+            tooltip: {
+                y: {
+                    formatter: (v) => 'AED ' + Number(v || 0).toLocaleString('en-AE', {
+                        minimumFractionDigits: 2, maximumFractionDigits: 2
+                    })
+                }
+            }
+        };
+
+        window.__benPie = new ApexCharts(document.querySelector('#benPie'), options);
+        window.__benPie.render();
+    });
+}
+
+// ---- Customer sheet tab rendering (inline or dropdown) ----
+
+function getCustomerSheetsFromDOM() {
+    // We assume each customer sheet section has id="sheet-customer-<slug>"
+    const arr = [];
+    $('[id^="sheet-customer-"]').each(function () {
+        const fullId = this.id;             // "sheet-customer-XYZ"
+        const sheet = fullId.slice('sheet-'.length); // "customer-XYZ"  <-- matches data-sheet needed
+        let label = sheet.replace(/^customer-/, '').replace(/[-_]+/g, ' ').trim();
+        if (label) label = label.toUpperCase();
+        else label = 'CUSTOMER';
+        arr.push({ sheet, label });
+    });
+    return arr;
+}
+
+function renderCustomerTabs() {
+    const $wrap = $('#customerTabsContainer');
+    if (!$wrap.length) return;
+
+    const items = getCustomerSheetsFromDOM();
+    $wrap.empty();
+
+    if (items.length === 0) return;
+
+    if (items.length <= 4) {
+        // Inline buttons
+        items.forEach(({ sheet, label }) => {
+            $wrap.append(
+                `<button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100"
+                 data-sheet="${sheet}">${label}</button>`
+            );
+        });
+        return;
+    }
+
+    // Dropdown (opens upwards)
+    const activeSheet = localStorage.getItem('activeSheet');
+    const selected = items.find(x => x.sheet === activeSheet);
+    const btnLabel = selected ? selected.label : 'Customer Sheets';
+
+    $wrap.html(`
+    <div class="relative">
+      <button id="custDropBtn" type="button"
+        class="px-4 py-2 text-sm font-medium hover:bg-gray-100"
+        aria-haspopup="true" aria-expanded="false">
+        ${btnLabel}
+        <i class="bi bi-caret-up-fill ml-1"></i>
+      </button>
+
+      <div id="custDropMenu"
+           class="hidden absolute bottom-full mb-2 left-0 right-0
+                  bg-white border shadow-lg rounded-md max-h-56 overflow-auto z-50">
+        ${items.map(x => `
+          <button class="sheet-tab block w-full text-left px-4 py-2 hover:bg-gray-50"
+                  data-sheet="${x.sheet}">
+            ${x.label}
+          </button>
+        `).join('')}
+      </div>
+    </div>
+  `);
 }
