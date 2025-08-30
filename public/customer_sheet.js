@@ -464,12 +464,24 @@ $(document).ready(function () {
             items
         };
 
-        console.table([['id', payload.id], ['sheet_id', payload.sheet_id], ['date', payload.date], ['supplier', payload.supplier]]);
+        // Compute a robust URL, then POST
+        const UPDATE_URL =
+            document.getElementById('customer-sheet-root')?.dataset.updateUrl ||
+            (window.routes && typeof window.routes.updateCustomerEntry === 'string' && window.routes.updateCustomerEntry.length
+                ? window.routes.updateCustomerEntry
+                : (typeof investmentUrl === 'function'
+                    ? investmentUrl('customer-sheet/entry/update')
+                    : '/customer-sheet/entry/update'));
 
-        console.log('UPDATE payload →', payload);
+        if (!UPDATE_URL || UPDATE_URL === '/') {
+            console.error('Bad UPDATE_URL:', UPDATE_URL);
+            alert('Update URL is not set. Refresh the page and try again.');
+            return;
+        }
 
-        $.post({
-            url: window.routes.updateCustomerEntry,
+        $.ajax({
+            type: 'POST',
+            url: UPDATE_URL,
             data: payload,
             headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
         })
@@ -482,13 +494,6 @@ $(document).ready(function () {
                 console.error('Update failed:', err.responseJSON || err);
                 alert('Update failed. See console for details.');
             });
-    });
-
-    $(document).on('submit', 'form', function (e) {
-        const action = (this.getAttribute('action') || '').trim();
-        if (action.endsWith('/update-customer-sheet')) {
-            console.warn('Form attempting submit:', this, $(this).serializeArray());
-        }
     });
 
     // ------- Modal open/close -------
@@ -688,6 +693,41 @@ $(document).ready(function () {
             $('.detail-row').not($targetRow).slideUp(200);
             $targetRow.stop(true, true).slideToggle(200);
         });
+
+    // === Make header "Save" appear when summary costs change ===
+    $(document)
+        .off('input.custDirty change.custDirty',
+            '.detail-row .dgd-input, .detail-row .labour-input, .detail-row .shipping-input')
+        .on('input.custDirty change.custDirty',
+            '.detail-row .dgd-input, .detail-row .labour-input, .detail-row .shipping-input',
+            function () {
+                const $detail = $(this).closest('.detail-row');
+                const rowId = $detail.data('id');
+                const $header = $(`.customer-header-row[data-id="${rowId}"]`);
+
+                // live recompute “Total Shipping Cost”
+                const n = v => parseFloat(String(v).replace(/[^\d.-]/g, '')) || 0;
+                const total = n($detail.find('.dgd-input').val())
+                    + n($detail.find('.labour-input').val())
+                    + n($detail.find('.shipping-input').val());
+                $detail.find('.total-shipping-cost').text(total.toFixed(2));
+
+                // show/hide Save depending on real dirtiness
+                const dirty = isRowDirty($detail);
+                $header.find('.save-changes-btn').toggleClass('hidden', !dirty);
+            });
+
+    // (optional) If remarks / receipt / mode change should also trigger Save:
+    $(document)
+        .off('input.custDirtyMeta change.custDirtyMeta',
+            '.detail-row [name="mode_of_transaction"], .detail-row [name="receipt_no"], .detail-row [name="remarks"]')
+        .on('input.custDirtyMeta change.custDirtyMeta',
+            '.detail-row [name="mode_of_transaction"], .detail-row [name="receipt_no"], .detail-row [name="remarks"]',
+            function () {
+                const $detail = $(this).closest('.detail-row');
+                const rowId = $detail.data('id');
+                $(`.customer-header-row[data-id="${rowId}"] .save-changes-btn`).removeClass('hidden');
+            });
 
     // Open the hidden file input
     $(document).on('click', '.btn-browse', function () {
@@ -1258,6 +1298,10 @@ function renderCustomerSheetRows(sheetId, entries) {
             .prop('readonly', false)
             .each(function () { $(this).data('orig', $(this).val() || ''); });
 
+        // ADD THIS: seed originals for cost inputs
+        $detailRow.find('.dgd-input, .labour-input, .shipping-input')
+            .each(function () { $(this).data('orig', $(this).val() || '0'); });
+
         // Convert item table cells to inputs immediately (if not already)
         $detailRow.find('tr.item-row').each(function () {
             const $row = $(this);
@@ -1326,6 +1370,8 @@ function initAlwaysEditable($detailRow, $headerRow) {
 // Compare current values vs originals
 function isRowDirty($detailRow) {
     let dirty = false;
+    const n = v => parseFloat(String(v).replace(/[^\d.-]/g, '')) || 0;
+    const numEq = (a, b) => Math.abs(n(a) - n(b)) < 1e-6;
 
     // Summary-right inputs/textarea
     $detailRow.find('input[name="mode_of_transaction"], [name="receipt_no"], textarea[name="remarks"]')
@@ -1341,6 +1387,14 @@ function isRowDirty($detailRow) {
         const cur = (($(this).val() || '') + '').trim();
         const orig = (($(this).data('orig') || '') + '').trim();
         if (cur !== orig) { dirty = true; return false; }
+    });
+    if (dirty) return true;
+
+    // numeric compare for cost inputs
+    $detailRow.find('.dgd-input, .labour-input, .shipping-input').each(function () {
+        const orig = $(this).data('orig');
+        if (orig === undefined) $(this).data('orig', $(this).val() || '0'); // lazy-seed
+        if (!numEq($(this).val(), orig)) { dirty = true; return false; }
     });
 
     return dirty;
@@ -1371,33 +1425,33 @@ function formatDateToWords(dateString) {
 
 // ------- Loan Ledger Helpers -------
 function loanRoute(tpl, params = {}) {
-  // sane defaults so .replace never runs on undefined
-  tpl = tpl || '/customer-sheet/:sheetId/loan-ledger';
-  return tpl
-    .replace(':sheetId', params.sheetId ?? '')
-    .replace(':id',      params.id ?? '');
+    // sane defaults so .replace never runs on undefined
+    tpl = tpl || '/customer-sheet/:sheetId/loan-ledger';
+    return tpl
+        .replace(':sheetId', params.sheetId ?? '')
+        .replace(':id', params.id ?? '');
 }
 
 function loadLoanLedger(sheetId, after) {
-  const tpl = (window.routes && window.routes.loanLedgerIndex)
-           || '/customer-sheet/:sheetId/loan-ledger';
+    const tpl = (window.routes && window.routes.loanLedgerIndex)
+        || '/customer-sheet/:sheetId/loan-ledger';
 
-  $.get(loanRoute(tpl, { sheetId }))
-    .done(res => {
-      renderLoanLedgerRows(res.data || [], sheetId);
-      if (typeof updateLoanLedgerTotals === 'function') {
-        const sheetName = $('#headerTitle').text().replace('Customer Sheet: ', '');
-        updateLoanLedgerTotals(sheetId, sheetName);
-      }
-      $(document).trigger('loanLedger:updated');
-      if (typeof after === 'function') after();
-    })
-    .fail(err => {
-      console.error('Loan ledger load failed', err);
-      $(`#loanLedgerBody-${sheetId}`).html(
-        `<tr><td colspan="5" class="px-4 py-3 text-red-600">Failed to load ledger.</td></tr>`
-      );
-    });
+    $.get(loanRoute(tpl, { sheetId }))
+        .done(res => {
+            renderLoanLedgerRows(res.data || [], sheetId);
+            if (typeof updateLoanLedgerTotals === 'function') {
+                const sheetName = $('#headerTitle').text().replace('Customer Sheet: ', '');
+                updateLoanLedgerTotals(sheetId, sheetName);
+            }
+            $(document).trigger('loanLedger:updated');
+            if (typeof after === 'function') after();
+        })
+        .fail(err => {
+            console.error('Loan ledger load failed', err);
+            $(`#loanLedgerBody-${sheetId}`).html(
+                `<tr><td colspan="5" class="px-4 py-3 text-red-600">Failed to load ledger.</td></tr>`
+            );
+        });
 }
 
 function updateLoanLedgerTotals(sheetId, sheetName) {

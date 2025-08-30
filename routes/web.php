@@ -15,6 +15,7 @@ use App\Http\Controllers\SQClientController;
 use App\Http\Controllers\SummaryController;
 use App\Http\Controllers\UserPreferenceController;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Log;
 
 // Homepage
 Route::get('/', [InvestmentController::class, 'index'])->name('index');
@@ -90,7 +91,15 @@ Route::get('/customer/sheet/data/{sheet}', [CustomerSheetController::class, 'get
 
 Route::post('/customer/sheet/entry/store', [CustomerSheetController::class, 'storeEntry'])->name('customer.sheet.entry.store');
 
-Route::post('/update-customer-sheet', [CustomerSheetController::class, 'update'])->name('customer.update');
+// DEPRECATED – remove after confirming no traffic
+Route::post('/update-customer-sheet', function (Illuminate\Http\Request $request) {
+    Log::warning('DEPRECATED /update-customer-sheet used', [
+        'ip' => $request->ip(),
+        'ua' => $request->userAgent(),
+    ]);
+    return app(\App\Http\Controllers\CustomerSheetController::class)->update($request);
+})->name('customer.update');
+
 
 Route::post('/sheet/create', [CustomerSheetController::class, 'create'])->name('sheet.create');
 Route::post('/sheet/entry', [CustomerSheetController::class, 'addEntry'])->name('sheet.addEntry');

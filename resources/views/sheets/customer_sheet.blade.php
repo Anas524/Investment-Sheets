@@ -50,7 +50,7 @@
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 justify-center place-items-center">
       <!-- Total Loan Paid Amount -->
       <div class="bg-text-gray-500 rounded-2xl shadow-lg p-6 text-center border-l-4 border-pink-400 w-full max-w-sm">
-        <h3 class="text-gray-500 font-medium text-sm mb-2">Total Invoice Value</h3>
+        <h3 class="text-gray-500 font-medium text-sm mb-2">Total Payment Charges by Customer</h3>
         <p id="totalLoanPaid-{{ $sheetId }}" class="text-2xl font-bold text-pink-400">AED 0.00</p>
       </div>
 
@@ -209,8 +209,3 @@
   </div>
 </div>
 
-<script>
-  window.routes = {
-    updateCustomerEntry: "{{ route('customer.entry.update') }}"
-  };
-</script>

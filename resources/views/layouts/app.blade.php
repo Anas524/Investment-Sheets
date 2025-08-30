@@ -40,6 +40,12 @@
         </div>
     </header>
 
+    <!-- makes the update URL available even if inline scripts are blocked -->
+    <div id="customer-sheet-root"
+        data-update-url="{{ route('customer.entry.update') }}"
+        hidden>
+    </div>
+
     <!-- MAIN DYNAMIC SECTION -->
     <main class="container mx-auto p-4">
         @yield('content')
@@ -66,19 +72,15 @@
         <span id="customerTabsContainer" class="relative"></span>
     </div>
 
-    <!-- Routes for JS (loan ledger etc.) -->
     <script>
-        window.routes = {
-            loanLedgerIndex: '/customer-sheet/:sheetId/loan-ledger',
-            loanLedgerStore: '/customer-sheet/:sheetId/loan-ledger',
-            loanLedgerUpdate: '/customer-sheet/loan-ledger/:id',
-            loanLedgerDestroy: '/customer-sheet/loan-ledger/:id',
-        };
-    </script>
-
-    <script>
-        window.routes = window.routes || {};
-        window.routes.loanOutstanding = "{{ route('summary.customerSheets.loans') }}";
+        window.routes = Object.assign({}, window.routes || {}, {
+            updateCustomerEntry: "{{ route('customer.entry.update') }}",
+            loanOutstanding: "{{ route('summary.customerSheets.loans') }}",
+            loanLedgerIndex: "/customer-sheet/:sheetId/loan-ledger",
+            loanLedgerStore: "/customer-sheet/:sheetId/loan-ledger",
+            loanLedgerUpdate: "/customer-sheet/loan-ledger/:id",
+            loanLedgerDestroy: "/customer-sheet/loan-ledger/:id",
+        });
     </script>
 
     <!-- SCRIPTS -->

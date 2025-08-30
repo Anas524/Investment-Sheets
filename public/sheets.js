@@ -2582,60 +2582,43 @@ function ensureKpiStickyBackdrop() {
 }
 
 function renderLoanOutstanding(rows) {
-    // Safe, order-proof aliases
-    const numAE = (window.gtsFmt && window.gtsFmt.numAE)
-        ? window.gtsFmt.numAE
-        : n => (Number(n) || 0).toLocaleString('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-    const aed = (window.gtsFmt && window.gtsFmt.aed)
-        ? window.gtsFmt.aed
-        : n => 'AED ' + numAE(n);
+    const numAE = window.gtsFmt?.numAE || (n =>
+        (Number(n) || 0).toLocaleString('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    );
+    const aed = window.gtsFmt?.aed || (n => 'AED ' + numAE(n));
 
     const $sec = $('#loanOutstandingSection');
     const $body = $('#loanOutstandingBody').empty();
     $sec.removeClass('hidden');
 
+    if (!Array.isArray(rows)) rows = [];
+
+    // sort purely by name or by magnitude if you like; here keep by name
+    rows.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+
+    if (rows.length === 0) {
+        $body.append(`<tr><td colspan="2" class="px-4 py-3 text-gray-600">No customer sheets found.</td></tr>`);
+        $('#loanOutstandingGrand').text(aed(0));
+        return;
+    }
+
+    // signed grand total (no filtering): e.g. -75809.50 + 1000 = -74809.50
     let grand = 0;
 
-    if (!Array.isArray(rows) || rows.length === 0) {
-        $body.append(`
-      <tr>
-        <td colspan="2" class="px-4 py-3 text-gray-600">
-           No outstanding balances across customer sheets.
-        </td>
-      </tr>
-    `);
-        $('#loanOutstandingGrand').text(aed(0));
-        return;
-    }
+    rows.forEach(r => {
+        const rem = Number(r.remaining || 0);
+        grand += rem;
 
-    const positives = rows
-        .map(r => ({ name: r.name, remaining: Number(r.remaining || 0) }))
-        .filter(r => r.remaining > 0)
-        .sort((a, b) => b.remaining - a.remaining);
-
-    if (positives.length === 0) {
-        $body.append(`
-      <tr>
-        <td colspan="2" class="px-4 py-3 text-gray-600">
-           All clear — no outstanding balances across customer sheets.
-        </td>
-      </tr>
-    `);
-        $('#loanOutstandingGrand').text(aed(0));
-        return;
-    }
-
-    positives.forEach(r => {
-        grand += r.remaining;
+        // no color classes on rows now
         $body.append(`
       <tr>
         <td class="px-4 py-3 text-gray-700">${r.name}</td>
-        <td class="px-4 py-3 text-right font-semibold">${numAE(r.remaining)}</td>
+        <td class="px-4 py-3 text-right">${numAE(rem)}</td>
       </tr>
     `);
     });
 
+    // footer remains blue via your blade class; just set the value:
     $('#loanOutstandingGrand').text(aed(grand));
 }
 
@@ -2994,10 +2977,10 @@ function enterBenEdit($tr) {
 
 // autosize number inputs as user types
 function benAutosizeNumber(el) {
-  const base = parseInt(el.getAttribute('data-basech') || '16', 10);
-  const v = (el.value || '').toString();
-  const ch = Math.max(base, v.length + 4);   // a bit of padding
-  el.style.width = ch + 'ch';
+    const base = parseInt(el.getAttribute('data-basech') || '16', 10);
+    const v = (el.value || '').toString();
+    const ch = Math.max(base, v.length + 4);   // a bit of padding
+    el.style.width = ch + 'ch';
 }
 
 function cancelBenEdit($tr) {

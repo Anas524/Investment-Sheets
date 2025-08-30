@@ -88,12 +88,21 @@ class SummaryController extends Controller
 
     public function customerSheetTotals(): JsonResponse
     {
-        $material = (float) CustomerSheetEntry::sum('total_material_buy');
-        $shipping = (float) CustomerSheetEntry::sum('shipping_cost');
+        $tot = DB::table('customer_sheet_entries')
+            ->selectRaw('
+            COALESCE(SUM(COALESCE(total_material_buy,0)), 0) AS material,
+            COALESCE(
+                SUM(
+                    COALESCE(total_shipping_cost,
+                             COALESCE(shipping_cost,0) + COALESCE(dgd,0) + COALESCE(labour,0))
+                ), 0
+            ) AS shipping
+        ')
+            ->first();
 
         return response()->json([
-            'material' => round($material, 2),
-            'shipping' => round($shipping, 2),
+            'material' => round((float)($tot->material ?? 0), 2),
+            'shipping' => round((float)($tot->shipping ?? 0), 2),
         ]);
     }
 
@@ -104,7 +113,7 @@ class SummaryController extends Controller
             ? 'customer_sheet_id'
             : (Schema::hasColumn('customer_sheet_entries', 'sheet_id') ? 'sheet_id' : null);
 
-        // If entries table missing (or no FK), still return all sheets with zeros
+        // If entries table missing (or no FK), return all sheets with zeros
         if (!Schema::hasTable('customer_sheet_entries') || !$fk) {
             $rows = CustomerSheet::query()
                 ->orderBy('sheet_name')
@@ -118,18 +127,25 @@ class SummaryController extends Controller
             return response()->json(['rows' => $rows], 200);
         }
 
-        $rows = CustomerSheet::query()
-            ->leftJoin('customer_sheet_entries as e', "e.$fk", '=', 'customer_sheets.id')
-            ->groupBy('customer_sheets.id', 'customer_sheets.sheet_name')
-            ->select('customer_sheets.sheet_name as name')
-            ->selectRaw('COALESCE(SUM(e.total_material_buy), 0) as material_sum')
-            ->selectRaw('COALESCE(SUM(e.shipping_cost), 0) as shipping_sum')
-            ->orderBy('customer_sheets.sheet_name')
+        $rows = DB::table('customer_sheets as cs')
+            ->leftJoin('customer_sheet_entries as e', "e.$fk", '=', 'cs.id')
+            ->selectRaw('
+            cs.sheet_name AS name,
+            COALESCE(SUM(COALESCE(e.total_material_buy,0)), 0) AS material,
+            COALESCE(
+                SUM(
+                    COALESCE(e.total_shipping_cost,
+                             COALESCE(e.shipping_cost,0) + COALESCE(e.dgd,0) + COALESCE(e.labour,0))
+                ), 0
+            ) AS shipping
+        ')
+            ->groupBy('cs.id', 'cs.sheet_name')
+            ->orderBy('cs.sheet_name')
             ->get()
             ->map(fn($r) => [
                 'name'     => (string) $r->name,
-                'material' => (float) $r->material_sum,
-                'shipping' => (float) $r->shipping_sum,
+                'material' => (float) $r->material,
+                'shipping' => (float) $r->shipping,
             ])
             ->values();
 
@@ -138,146 +154,49 @@ class SummaryController extends Controller
 
     public function customerSheetLoans(): JsonResponse
     {
-        $resp = fn($rows) => response()->json(['rows' => $rows], 200);
-        $db = DB::getDatabaseName();
+        $rows = DB::table('customer_sheets as cs')
+            ->leftJoin(DB::raw('
+            (SELECT customer_sheet_id,
+                    SUM(COALESCE(total_material_buy,0) + COALESCE(total_shipping_cost,0)) AS sheet_total
+             FROM customer_sheet_entries
+             GROUP BY customer_sheet_id) e
+        '), 'e.customer_sheet_id', '=', 'cs.id')
+            ->leftJoin(DB::raw('
+            (SELECT customer_sheet_id,
+                    SUM(COALESCE(amount,0)) AS loan_paid
+             FROM customer_loan_ledger_entries
+             GROUP BY customer_sheet_id) ll
+        '), 'll.customer_sheet_id', '=', 'cs.id')
+            ->selectRaw('
+            cs.id,
+            cs.sheet_name AS name,
+            COALESCE(e.sheet_total,0)  AS sheet_total,
+            COALESCE(ll.loan_paid,0)   AS loan_paid,
+            -- 🔹 match Customer Sheet: remaining = loan_paid - sheet_total (signed)
+            (COALESCE(ll.loan_paid,0) - COALESCE(e.sheet_total,0)) AS remaining_signed,
+            -- 🔹 dues only (positive absolute of negatives) for grand total
+            CASE
+              WHEN (COALESCE(ll.loan_paid,0) - COALESCE(e.sheet_total,0)) < 0
+              THEN ABS(COALESCE(ll.loan_paid,0) - COALESCE(e.sheet_total,0))
+              ELSE 0
+            END AS due_abs
+        ')
+            ->orderBy('name')
+            ->get();
 
-        // 0) If balances live directly on customer_sheets, prefer that.
-        if (Schema::hasTable('customer_sheets')) {
-            foreach (['remaining_balance', 'loan_remaining', 'outstanding', 'balance', 'due_amount'] as $csBal) {
-                if (Schema::hasColumn('customer_sheets', $csBal)) {
-                    $rows = DB::table('customer_sheets as cs')
-                        ->select('cs.sheet_name as name', DB::raw("COALESCE(SUM(cs.$csBal),0) as remaining"))
-                        ->groupBy('cs.id', 'cs.sheet_name')
-                        ->havingRaw('remaining > 0')
-                        ->orderByDesc('remaining')
-                        ->get()
-                        ->map(fn($r) => ['name' => (string)$r->name, 'remaining' => (float)$r->remaining])
-                        ->values();
-                    if ($rows->count()) return $resp($rows);
-                }
-            }
-        }
+        // Grand total = sum of dues only (negatives on the signed metric)
+        $grand = (float) $rows->sum('due_abs');
 
-        // 0b) If per-entry remaining exists on customer_sheet_entries, use it.
-        if (Schema::hasTable('customer_sheet_entries')) {
-            $fk = collect(['customer_sheet_id', 'sheet_id', 'cs_id'])->first(fn($c) => Schema::hasColumn('customer_sheet_entries', $c));
-            if ($fk) {
-                foreach (['remaining', 'remaining_balance', 'loan_remaining', 'balance_due', 'outstanding'] as $remCol) {
-                    if (Schema::hasColumn('customer_sheet_entries', $remCol)) {
-                        $rows = DB::table('customer_sheet_entries as e')
-                            ->join('customer_sheets as cs', 'cs.id', '=', "e.$fk")
-                            ->select('cs.sheet_name as name', DB::raw("COALESCE(SUM(e.$remCol),0) as remaining"))
-                            ->groupBy('cs.id', 'cs.sheet_name')
-                            ->havingRaw('remaining > 0')
-                            ->orderByDesc('remaining')
-                            ->get()
-                            ->map(fn($r) => ['name' => (string)$r->name, 'remaining' => (float)$r->remaining])
-                            ->values();
-                        if ($rows->count()) return $resp($rows);
-                    }
-                }
-            }
-        }
+        // expose the signed value as "remaining" to the frontend
+        $rows = $rows->map(fn($r) => [
+            'id'          => $r->id,
+            'name'        => $r->name,
+            'sheet_total' => (float) $r->sheet_total,
+            'loan_paid'   => (float) $r->loan_paid,
+            'remaining'   => (float) $r->remaining_signed, // e.g. RH = -75809.50, BL = +1000.00
+        ]);
 
-        // 1) Find a ledger-like table dynamically.
-        $candidates = DB::select("
-        SELECT table_name
-        FROM information_schema.tables
-        WHERE table_schema = ? AND (
-            table_name LIKE '%loan%' OR table_name LIKE '%ledger%'
-        )
-        ORDER BY table_name
-    ", [$db]);
-
-        foreach ($candidates as $cand) {
-            $tbl = $cand->table_name;
-
-            // discover columns once
-            $cols = DB::select("
-            SELECT column_name FROM information_schema.columns
-            WHERE table_schema = ? AND table_name = ?
-        ", [$db, $tbl]);
-            $colset = collect($cols)->pluck('column_name')->map(fn($c) => strtolower($c))->all();
-            $has = fn($c) => in_array(strtolower($c), $colset, true);
-
-            // FK to customer_sheets
-            $fk = collect(['customer_sheet_id', 'sheet_id', 'customer_id', 'cs_id'])->first($has);
-            if (!$fk) continue;
-
-            // Helper to execute a strategy
-            $run = function (string $expr) use ($tbl, $fk) {
-                return DB::table("$tbl as ll")
-                    ->join('customer_sheets as cs', 'cs.id', '=', "ll.$fk")
-                    ->select('cs.sheet_name as name', DB::raw("$expr as remaining"))
-                    ->groupBy('cs.id', 'cs.sheet_name')
-                    ->havingRaw("$expr > 0")
-                    ->orderByDesc(DB::raw($expr))
-                    ->get()
-                    ->map(fn($r) => ['name' => (string)$r->name, 'remaining' => (float)$r->remaining])
-                    ->values();
-            };
-
-            // A) Direct balance column
-            foreach (['remaining_balance', 'balance', 'outstanding', 'due_amount', 'remaining'] as $balCol) {
-                if ($has($balCol)) {
-                    $rows = $run("COALESCE(SUM(ll.$balCol),0)");
-                    if ($rows->count()) return $resp($rows);
-                }
-            }
-
-            // plausible amount columns
-            $amt = collect(['amount', 'amt', 'value', 'total', 'amount_aed', 'aed', 'loan_amount'])->first($has);
-
-            // B) debit/credit
-            if ($has('debit') && $has('credit')) {
-                $rows = $run("COALESCE(SUM(COALESCE(ll.debit,0)) - SUM(COALESCE(ll.credit,0)),0)");
-                if ($rows->count()) return $resp($rows);
-            }
-            if ($has('dr') && $has('cr')) {
-                $rows = $run("COALESCE(SUM(COALESCE(ll.dr,0)) - SUM(COALESCE(ll.cr,0)),0)");
-                if ($rows->count()) return $resp($rows);
-            }
-
-            // C) loan_amount - paid_amount
-            if ($has('loan_amount') && ($has('paid_amount') || $has('repayment') || $has('received'))) {
-                $paidCol = $has('paid_amount') ? 'paid_amount' : ($has('repayment') ? 'repayment' : 'received');
-                $rows = $run("COALESCE(SUM(COALESCE(ll.loan_amount,0)) - SUM(COALESCE(ll.$paidCol,0)),0)");
-                if ($rows->count()) return $resp($rows);
-            }
-
-            // D) type + amount labels
-            if ($amt) {
-                $typeCol = collect(['type', 'entry_type', 'txn_type', 'category', 'mode', 'description', 'remarks'])->first($has);
-                if ($typeCol) {
-                    $loanExpr = "
-                    SUM(CASE
-                        WHEN LOWER(ll.$typeCol) IN ('loan','loan given','credit','advance','given','borrow','lend')
-                             OR LOWER(ll.$typeCol) LIKE '%loan%'
-                             OR LOWER(ll.$typeCol) LIKE '%advance%'
-                        THEN COALESCE(ll.$amt,0) ELSE 0 END)";
-                    $payExpr  = "
-                    SUM(CASE
-                        WHEN LOWER(ll.$typeCol) IN ('paid','payment','repayment','settled','return','returned','refund','received')
-                             OR LOWER(ll.$typeCol) LIKE '%pay%'
-                             OR LOWER(ll.$typeCol) LIKE '%return%'
-                             OR LOWER(ll.$typeCol) LIKE '%refund%'
-                        THEN COALESCE(ll.$amt,0) ELSE 0 END)";
-                    $rows = $run("COALESCE(($loanExpr) - ($payExpr),0)");
-                    if ($rows->count()) return $resp($rows);
-                }
-
-                // E) sign-based fallback
-                $rows = $run("
-                COALESCE(
-                    SUM(CASE WHEN COALESCE(ll.$amt,0) > 0 THEN ll.$amt ELSE 0 END)
-                  - SUM(CASE WHEN COALESCE(ll.$amt,0) < 0 THEN -ll.$amt ELSE 0 END)
-                ,0)");
-                if ($rows->count()) return $resp($rows);
-            }
-        }
-
-        // Nothing found
-        return $resp([]);
+        return response()->json(['rows' => $rows, 'grand' => $grand], 200);
     }
 
     public function localSalesTotal()
