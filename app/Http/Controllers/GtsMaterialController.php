@@ -8,6 +8,8 @@ use Illuminate\Support\Facades\Storage;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class GtsMaterialController extends Controller
 {
@@ -58,37 +60,66 @@ class GtsMaterialController extends Controller
     // Update an existing entry
     public function update(Request $request, $id)
     {
-        $material = GtsMaterial::findOrFail($id);
+        $material = GtsMaterial::with('items')->findOrFail($id);
 
-        // Update material base fields
-        $material->update([
-            'mode_of_transaction' => $request->mode_of_transaction,
-            'receipt_no' => $request->receipt_no,
-            'remarks' => $request->remarks,
-            'shipping_cost' => $request->shipping_cost,
-            'dgd' => $request->dgd,
-            'labour' => $request->labour,
-            'total_material' => $request->total_material ?? 0,
-            'total_shipping_cost' => $request->total_shipping_cost ?? 0,
-        ]);
+        // --- 1) Update base fields from request ---
+        $shippingCost = (float) ($request->shipping_cost ?? 0);
+        $dgd          = (float) ($request->dgd ?? 0);
+        $labour       = (float) ($request->labour ?? 0);
 
-        // Update item table if present
+        $material->mode_of_transaction = $request->mode_of_transaction;
+        $material->receipt_no          = $request->receipt_no;
+        $material->remarks             = $request->remarks;
+        $material->shipping_cost       = $shippingCost;
+        $material->dgd                 = $dgd;
+        $material->labour              = $labour;
+
+        // If you still want to keep these raw fields for reference:
+        $material->total_material      = (float) ($request->total_material ?? 0);
+        // We'll (re)compute total_shipping_cost & total_material_buy below.
+
+        // --- 2) Replace items if provided ---
+        $items = [];
         if ($request->has('materials') && is_array($request->materials)) {
-            // Delete old items
             $material->items()->delete();
 
-            // Add new items
-            foreach ($request->materials as $item) {
-                $material->items()->create([
-                    'description' => $item['description'],
-                    'units' => $item['units'],
-                    'unit_price' => $item['unit_price'],
-                    'vat' => $item['vat'],
-                    'weight_per_ctn' => $item['weight_per_ctn'],
-                    'ctns' => $item['ctns'],
+            foreach ($request->materials as $it) {
+                $items[] = $material->items()->create([
+                    'description'     => $it['description']     ?? '',
+                    'units'           => $it['units']           ?? 0,
+                    'unit_price'      => $it['unit_price']      ?? 0,
+                    'vat'             => $it['vat']             ?? 0,
+                    'weight_per_ctn'  => $it['weight_per_ctn']  ?? 0,
+                    'ctns'            => $it['ctns']            ?? 0,
                 ]);
             }
+        } else {
+            // use existing items for the recompute
+            $items = $material->items()->get();
         }
+
+        // --- 3) Authoritative recompute (match what the cards show) ---
+        // Cards use:
+        //   Total Material  => sum of "total material buy" (units*unit_price + vat) over items
+        //   Total Shipping  => shipping_cost + dgd + labour  (or total_shipping_cost if you store it)
+        $totalMaterialBuy = 0.0;
+        foreach ($items as $it) {
+            $units      = (float) ($it->units ?? 0);
+            $unitPrice  = (float) ($it->unit_price ?? 0);
+            $vat        = (float) ($it->vat ?? 0);
+            $totalMaterialBuy += ($units * $unitPrice) + $vat;
+        }
+
+        $totalShippingCost = $shippingCost + $dgd + $labour;
+
+        // Persist the computed fields that the Summary endpoint reads
+        $material->total_material_buy   = round($totalMaterialBuy, 2);
+        // If the column exists, keep it perfectly aligned with the card logic:
+        if (Schema::hasColumn('gts_materials', 'total_shipping_cost')) {
+            $material->total_shipping_cost = round($totalShippingCost, 2);
+        }
+
+        $material->save();
 
         return response()->json(['message' => 'Material updated successfully']);
     }

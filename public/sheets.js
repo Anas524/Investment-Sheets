@@ -43,9 +43,23 @@ let originalUSClients = [];
 // SQ Sheet
 let originalSQClients = [];
 
+// ---- Summary globals (declare early) ----
+window.sheetTotals = window.sheetTotals || { material: 0, shipping: 0, investment: 0 };
+let _lastGoodSummary = { material: 0, shipping: 0, investment: 0 }; // must exist before first render
+let _summaryReqId = 0;
+window._gtsReqId = window._gtsReqId || 0;
+window._gtsAppliedReqId = window._gtsAppliedReqId || 0;
+
 function setActiveSheetBtn(sheet) {
     $('.sheet-tab').removeClass('active').attr('aria-current', 'false');
     $(`.sheet-tab[data-sheet="${sheet}"]`).addClass('active').attr('aria-current', 'page');
+}
+
+function fetchInvestmentTotalDedupe() {
+    if (window._invFetchPromise) return window._invFetchPromise;
+    window._invFetchPromise = fetchAndUpdateInvestmentTotal()
+        .always(() => { window._invFetchPromise = null; });
+    return window._invFetchPromise;
 }
 
 $(document).ready(function () {
@@ -108,9 +122,8 @@ $(document).ready(function () {
             loadLocalSales();
         } else if (sheet === 'summary') {
             initSummaryLogic();
-            loadSummarySheet();
-            ensureCashInSkeleton();
             loadCashInBreakdown();
+            fetchAndUpdateInvestmentTotal();
             refreshLoanOutstandingHybrid();
         } else if (sheet === 'beneficiary') {
             initBenLogic();
@@ -132,8 +145,8 @@ $(document).ready(function () {
         setActiveSheetBtn('summary');
         // run the loaders so KPI, chart, breakdowns, and LOANS render on reload
         initSummaryLogic();
-        loadSummarySheet();
         loadCashInBreakdown();
+        if (typeof fetchAndUpdateInvestmentTotal === 'function') fetchAndUpdateInvestmentTotal();
         refreshLoanOutstandingHybrid();
     }
 
@@ -580,13 +593,9 @@ $(document).ready(function () {
     $(document)
         .off('customerSheets:totalsUpdated.summaryTable')
         .on('customerSheets:totalsUpdated.summaryTable', function () {
-            fetchCustomerSheetsRows()
-                .done(res => {
-                    const rows = Array.isArray(res?.rows) ? res.rows : [];
-                    if (rows.length > 0) renderCustomerSheetsTable(rows);
-                    else renderCustomerSheetsTable(collectCustomerSheetsRowsFromDOM());
-                })
-                .fail(() => renderCustomerSheetsTable(collectCustomerSheetsRowsFromDOM()));
+            if ($('#sheet-summary').is(':visible')) {
+                loadCashInBreakdown();
+            }
         });
 
     $(document)
@@ -1879,6 +1888,11 @@ function loadLocalSales() {
 // ---- Summary helpers ----
 const fmtAED = n => 'AED ' + (parseFloat(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2 });
 
+function hasRealTotals(x) {
+    return !!x && (Number(x.material) > 0 || Number(x.shipping) > 0);
+    // or: return Boolean(x) && (Number(x.material) > 0 || Number(x.shipping) > 0);
+}
+
 function getGtsTotalsFromStorage() {
     try {
         if (window.gtsTotals && typeof window.gtsTotals.material === 'number') return window.gtsTotals;
@@ -1907,64 +1921,79 @@ function fetchLocalSalesTotal() {
         });
 }
 
-// Update Summary’s numbers (cards + chart) from {material, shipping, localSalesTotal}
-function renderSummaryFromGtsTotals({ material = 0, shipping = 0 } = {}) {
-    material = Number(material) || 0;
-    shipping = Number(shipping) || 0;
-
-    const cashOut = material + shipping;
-    $('#totalPurchaseMaterial').text(fmtAED(material));
-    $('#totalShippingCost').text(fmtAED(shipping));
-    $('#cashOutAmount').text(fmtAED(cashOut));
-
-    // Do NOT re-render cash-in cards here.
-    // Recompute profit using what’s already on screen (or last cached).
-    const cashInNow = (window._ciLast)
-        ? (Number(window._ciLast?.us?.material || 0)
-            + Number(window._ciLast?.sq?.material || 0)
-            + Number(window._ciLast?.local?.material || 0)
-            + Number(window._ciLast?.customer?.material || 0)
-            + ((window._ciLast?.customer?.hasShipping === false) ? 0
-                : Number(window._ciLast?.customer?.shipping || 0)))
-        : getNum('#cashInAmount');
-
-    const profit = cashInNow - cashOut;
-    $('#profitAmount').text(fmtAED(profit));
-    // keep chart in sync even if only cash-out changed
-    scheduleChartUpdate(cashInNow, cashOut, profit, !window._chartIntroPlayed);
-}
-
-// Load Summary (now uses cached DOM totals if present)
-function loadSummarySheet() {
-    const gts = getGtsTotalsFromStorage();
-    if (gts) {
-        // Fetch Local Sales, then render
-        fetchLocalSalesTotal().then(lsTotal => {
-            renderSummaryFromGtsTotals({
-                material: gts.material || 0,
-                shipping: gts.shipping || 0,
-                localSalesTotal: lsTotal || 0
-            });
-            refreshLoanOutstandingHybrid();
-        });
+// Update Summary’s numbers (cards + chart)
+function renderSummaryFromGtsTotals(
+    { material = null, shipping = null, investment = null } = {},
+    _src = 'unknown',
+    _reqId = 0,
+    opts = {}
+) {
+    if (_reqId && _reqId < (window._gtsAppliedReqId || 0)) {
+        console.warn('[Summary render ignored: stale]', _src, { material, shipping, investment, _reqId });
         return;
     }
 
-    // Fallback: fetch summary-data and LS in parallel on hard refresh
-    $.when(
-        $.getJSON('summary-data'),
-        fetchLocalSalesTotal()
-    ).done((dataResp, lsTotal) => {
-        const data = dataResp[0] || {};
-        renderSummaryFromGtsTotals({
-            material: data.total_purchase_of_material || 0,
-            shipping: data.total_shipping_cost || 0,
-            localSalesTotal: lsTotal || 0
-        });
-        refreshLoanOutstandingHybrid();
-    }).fail(() => {
-        renderSummaryFromGtsTotals({ material: 0, shipping: 0, localSalesTotal: 0 });
-        refreshLoanOutstandingHybrid();
+    var allowZero = !!(opts && opts.allowZero);
+
+    // Normalize incoming, with safe fallbacks
+    var mIn = (material == null)
+        ? Number(_lastGoodSummary && _lastGoodSummary.material) || 0
+        : Number(material) || 0;
+
+    var sIn = (shipping == null)
+        ? Number(_lastGoodSummary && _lastGoodSummary.shipping) || 0
+        : Number(shipping) || 0;
+
+    var invFromCache = Number((window.sheetTotals && window.sheetTotals.investment)) || 0;
+    var invFromDom = (function () {
+        var el = document.getElementById('totalInvestmentAmount-investment');
+        return el ? (parseFloat((el.textContent || '').replace(/[^\d.-]/g, '')) || 0) : 0;
+    })();
+
+    var iIn = (investment == null)
+        ? (invFromCache || invFromDom || Number(_lastGoodSummary && _lastGoodSummary.investment) || 0)
+        : Number(investment) || 0;
+
+    // Guard: if both m & s are zero but we have a last-good and NOT allowZero => keep last-good
+    var bothZero = (mIn === 0 && sIn === 0);
+    var hadGood = ((Number(_lastGoodSummary && _lastGoodSummary.material) > 0) ||
+        (Number(_lastGoodSummary && _lastGoodSummary.shipping) > 0));
+
+    var materialFinal = (bothZero && hadGood && !allowZero) ? Number(_lastGoodSummary.material) || 0 : mIn;
+    var shippingFinal = (bothZero && hadGood && !allowZero) ? Number(_lastGoodSummary.shipping) || 0 : sIn;
+    var investmentFinal = iIn;
+
+    // Persist “last good” if any positive OR the caller explicitly allows zero (server fetch)
+    if (allowZero || (materialFinal > 0 || shippingFinal > 0 || investmentFinal > 0)) {
+        _lastGoodSummary = { material: materialFinal, shipping: shippingFinal, investment: investmentFinal };
+    }
+
+    // Paint the 3 cards
+    $('#totalPurchaseMaterial').text(fmtAED(materialFinal));
+    $('#totalShippingCost').text(fmtAED(shippingFinal));
+    $('#totalInvestmentAmount-investment').text(fmtAED(investmentFinal));
+
+    // Deriveds
+    var cashOut = materialFinal + shippingFinal + investmentFinal;
+    $('#cashOutAmount').text(fmtAED(cashOut));
+
+    var cashInNow = (window._ciLast)
+        ? (Number(window._ciLast.us && window._ciLast.us.material || 0)
+            + Number(window._ciLast.sq && window._ciLast.sq.material || 0)
+            + Number(window._ciLast.local && window._ciLast.local.material || 0)
+            + ((window._ciLast.customers || []).reduce(function (s, c) {
+                return s + Number(c.material || 0) + Number(c.shipping || 0);
+            }, 0)))
+        : getNum('#cashInAmount');
+
+    var profit = cashInNow - cashOut;
+    $('#profitAmount').text(fmtAED(profit));
+    scheduleChartUpdate(cashInNow, cashOut, profit, !window._chartIntroPlayed);
+
+    if (_reqId) window._gtsAppliedReqId = _reqId;
+
+    console.log('[Summary render]', _src, {
+        material: materialFinal, shipping: shippingFinal, investment: investmentFinal, _reqId
     });
 }
 
@@ -2126,120 +2155,65 @@ function updateCashInBreakdown(data) {
 }
 
 // --- one-time skeleton for Cash In cards (fixed order) ---
-function ensureCashInSkeleton() {
-    if (window.__ciSkeletonReady) return;
-    window.__ciSkeletonReady = true;
-
-    const $grid = $('#cashInBreakdownGrid');
-    if (!$grid.length) return;
-
-    const mk = (key, label) => `
-    <div id="ci-card-${key}" class="bg-white rounded-2xl shadow p-5 border hover:shadow-md transition">
-      <div class="text-sm text-gray-500 mb-1">${label}</div>
-      <div class="text-lg font-semibold mb-3 ci-total">AED 0.00</div>
-      <div class="space-y-1 text-sm">
-        <div class="flex items-center justify-between">
-          <span class="text-gray-600">Total Material</span>
-          <span class="font-medium ci-material">AED 0.00</span>
-        </div>
-        <div class="flex items-center justify-between ci-ship-row">
-          <span class="text-gray-600">Total Shipping Cost</span>
-          <span class="font-medium ci-shipping">AED 0.00</span>
-        </div>
-      </div>
-    </div>`;
-
-    $grid.html(
-        mk('us', 'US Client Payment') +
-        mk('sq', 'SQ Sheet') +
-        mk('local', 'Local Sales (incl VAT)') +
-        mk('customer', 'Customer Sheets')
-    );
-}
-
-function updateCashInCard(key, material = 0, shipping = 0, hasShipping = true) {
-    const $card = $(`#ci-card-${key}`);
-    if (!$card.length) return;
-
-    material = Number(material) || 0;
-    shipping = Number(shipping) || 0;
-    const shipVal = hasShipping ? shipping : 0;
-    const total = material + shipVal;
-
-    $card.find('.ci-total').text(fmtAED(total));
-    $card.find('.ci-material').text(fmtAED(material));
-    $card.find('.ci-shipping').text(fmtAED(shipping));
-    $card.find('.ci-ship-row').toggle(hasShipping);
-}
-
 let _cashInBuildSeq = 0;
-let _ciSeeded = false;
 let _ciLast = null;
 
 function loadCashInBreakdown() {
     if (!$('#sheet-summary').is(':visible')) return;
-
-    ensureCashInSkeleton();           // cards exist, stays stable
     const seq = ++_cashInBuildSeq;
 
-    // --- 1) Seed ONCE, then never clear to zeros again ---
-    if (!_ciSeeded) {
-        const usSeed = (getUsCached() ?? getNum('#us-total-amount') ?? 0);
-        const sqSeed = (getSqCached() ?? 0);
-        const localSeed = (getLocalSalesCached() ?? 0);
-        const seed = {
-            us: { name: 'US Client Payment', material: Number(usSeed) || 0, hasShipping: false },
-            sq: { name: 'SQ Sheet', material: Number(sqSeed) || 0, hasShipping: false },
-            local: { name: 'Local Sales', material: Number(localSeed) || 0, hasShipping: false },
-            customer: { name: 'Customer Sheets', material: 0, shipping: 0, hasShipping: true },
-        };
-        _ciLast = seed;
-        renderCashInBreakdown(seed);
-        _ciSeeded = true;
-    } else if (_ciLast) {
-        // keep showing last values during the fetch (no flicker)
-        renderCashInBreakdown(_ciLast);
-    }
-
-    // --- 2) Fetch real numbers in parallel (include US now) ---
     const localCached = getLocalSalesCached();
     const sqCached = getSqCached();
     const usCached = getUsCached();
 
-    const localP = (localCached != null) ? $.Deferred().resolve(localCached).promise()
-        : fetchLocalSalesTotal();
-    const sqP = (sqCached != null) ? $.Deferred().resolve(sqCached).promise()
-        : fetchSqTotal();
-    const usP = (usCached != null) ? $.Deferred().resolve(usCached).promise()
-        : fetchUsTotal();
-    const custP = fetchCustomerSheetsTotals();   // { material, shipping }
+    // ALWAYS fetch fresh; fall back to cache only if the fetch fails
+    const localP = $.getJSON(typeof investmentUrl === 'function' ? investmentUrl('summary/local-sales/total') : '/summary/local-sales/total')
+        .then(r => Number(r?.total) || 0)
+        .catch(() => Number(localCached) || 0);
 
-    $.when(usP, sqP, localP, custP).done(function (usAmt, sqAmt, localAmt, custTotalsArg) {
-        if (seq !== _cashInBuildSeq) return; // drop stale result
+    const sqP = $.getJSON(typeof investmentUrl === 'function' ? investmentUrl('summary/sq/total') : '/summary/sq/total')
+        .then(r => Number(r?.total) || 0)
+        .catch(() => Number(sqCached) || 0);
 
-        const ct = Array.isArray(custTotalsArg) ? (custTotalsArg[0] || {}) : (custTotalsArg || {});
+    const usP = fetchUsTotalAlways(); // see below
+    const rowsP = fetchCustomerSheetsRows(); // keep as is
+
+    $.when(usP, sqP, localP, rowsP).done(function (usAmt, sqAmt, localAmt, rowsArg) {
+        if (seq !== _cashInBuildSeq) return;
+
+        const rows = Array.isArray(rowsArg?.rows) ? rowsArg.rows : [];
+        const customerMaterial = rows.reduce((s, r) => s + Number(r.material || 0), 0);
+        const customerShipping = rows.reduce((s, r) => s + Number(r.shipping || 0), 0);
+
         const finalData = {
-            us: { name: 'US Client Payment', material: Number(usAmt) || 0, hasShipping: false },
-            sq: { name: 'SQ Sheet', material: Number(sqAmt) || 0, hasShipping: false },
-            local: { name: 'Local Sales', material: Number(localAmt) || 0, hasShipping: false },
-            customer: { name: 'Customer Sheets', material: Number(ct.material) || 0, shipping: Number(ct.shipping) || 0, hasShipping: true },
+            us: { name: 'US Client Payment', material: Number(usAmt) || 0 },
+            sq: { name: 'SQ Sheet', material: Number(sqAmt) || 0 },
+            local: { name: 'Local Sales', material: Number(localAmt) || 0 },
+            customers: rows
         };
 
-        _ciLast = finalData;                 // remember last good values
-        renderCashInBreakdown(finalData);    // single solid update
+        const grand = (Number(usAmt) || 0) + (Number(sqAmt) || 0) + (Number(localAmt) || 0)
+            + customerMaterial + customerShipping;
 
-        // (Optional) table under cards
-        fetchCustomerSheetsRows()
-            .done(res => {
-                if (seq !== _cashInBuildSeq) return;
-                const rows = Array.isArray(res?.rows) ? res.rows : [];
-                renderCustomerSheetsTable(rows.length ? rows : collectCustomerSheetsRowsFromDOM());
-            })
-            .fail(() => {
-                if (seq !== _cashInBuildSeq) return;
-                renderCustomerSheetsTable(collectCustomerSheetsRowsFromDOM());
-            });
+        _ciLast = finalData;
+        renderCashInBreakdown(finalData, grand);
     });
+}
+
+// US total fetch (always)
+function fetchUsTotalAlways() {
+    // If you have a dedicated endpoint, use it here. If not, reuse the combined breakdown endpoint and extract.
+    const url = (typeof investmentUrl === 'function')
+        ? investmentUrl('summary/cash-in-breakdown')
+        : '/summary/cash-in-breakdown';
+
+    return $.getJSON(url)
+        .then(list => {
+            // find the US row
+            const r = (Array.isArray(list) ? list : []).find(x => /US Client Payment/i.test(x.sheet || x.name || ''));
+            return Number(r?.total || r?.material || 0) || 0;
+        })
+        .catch(() => Number(getUsCached()) || 0);
 }
 
 function updateProfitBreakdown(profit) {
@@ -2252,6 +2226,91 @@ function updateProfitBreakdown(profit) {
     $('#shareholder1Amount').text('AED ' + shareholder1.toLocaleString(undefined, { minimumFractionDigits: 2 }));
     $('#shareholder2Amount').text('AED ' + shareholder2.toLocaleString(undefined, { minimumFractionDigits: 2 }));
 }
+
+// ---- Shared Totals Cache + Broadcaster ----
+window.sheetTotals = window.sheetTotals || { material: 0, shipping: 0, investment: 0 };
+
+/**
+ * Called by Materials page after recomputing totals.
+ * Safe to call from anywhere; Summary will update if open.
+ */
+window.updateMaterialTotals = function (material, shipping, opts = {}) {
+    const _src = opts.src || 'materials';
+    const _reqId = opts.reqId || 0;
+
+    // Coerce numbers
+    material = Number(material) || 0;
+    shipping = Number(shipping) || 0;
+
+    // Update in-memory cache
+    window.sheetTotals.material = material;
+    window.sheetTotals.shipping = shipping;
+
+    // Broadcast to other pages/tabs
+    try {
+        localStorage.setItem('gts:totals', JSON.stringify({
+            material, shipping, ts: Date.now()
+        }));
+    } catch (e) {
+        console.warn('localStorage broadcast skipped', e);
+    }
+
+    // If Summary is present on this page, update its cards now
+    if (typeof renderSummaryFromGtsTotals === 'function') {
+        renderSummaryFromGtsTotals({ material, shipping }, _src, _reqId);
+    }
+};
+
+// ---- Summary bootstrapping / listeners ----
+(function bootstrapSummarySync() {
+    // helper
+    function parseTotals(json) {
+        try {
+            const o = JSON.parse(json) || {};
+            return {
+                material: Number(o.material) || 0,
+                shipping: Number(o.shipping) || 0
+            };
+        } catch { return { material: 0, shipping: 0 }; }
+    }
+
+    // 1) First paint from cached localStorage (if any)
+    try {
+        const saved = localStorage.getItem('gts:totals') || localStorage.getItem('gtsTotals');
+        if (saved && typeof renderSummaryFromGtsTotals === 'function') {
+            const { material, shipping } = parseTotals(saved);
+            // ignore zero-only bootstrap to avoid flicker; server fetch will repaint
+            if (material > 0 || shipping > 0) {
+                renderSummaryFromGtsTotals({ material, shipping }, 'localStorage:init', 0 /* no allowZero */);
+            }
+        }
+    } catch (e) {
+        console.warn('init read of gts totals failed', e);
+    }
+
+    // 2) Live updates when Materials page writes new totals
+    window.addEventListener('storage', (e) => {
+        if (!e.newValue) return;
+        if (e.key !== 'gts:totals' && e.key !== 'gtsTotals') return;
+
+        const { material, shipping } = parseTotals(e.newValue);
+
+        // ignore zero-only storage events (not authoritative)
+        if (material === 0 && shipping === 0) return;
+
+        if (typeof renderSummaryFromGtsTotals === 'function') {
+            // optional: only repaint when Summary is visible
+            if (!$('#sheet-summary').is(':visible')) return;
+
+            renderSummaryFromGtsTotals(
+                { material, shipping },
+                'storage:event',
+                0 /* no reqId sequencing needed here */
+                // no opts.allowZero → keeps last-good if both are 0
+            );
+        }
+    });
+})();
 
 let summaryInited = false;
 
@@ -2346,42 +2405,156 @@ function initSummaryLogic() {
                     window._creatingSheet = false;
                 });
         });
+
+    // Paint once from cache if we have real numbers (NO server call)
+    const cached = getGtsTotalsFromStorage() || window.sheetTotals || {};
+    if (hasRealTotals(cached)) {
+        renderSummaryFromGtsTotals(
+            { material: +cached.material || 0, shipping: +cached.shipping || 0, investment: +window.sheetTotals?.investment || 0 },
+            'cache'
+        );
+    }
+
+    refreshSummaryFromServer('initial-fetch');
+
+    $(document)
+        .off('click.summaryTab')
+        .on('click.summaryTab', '.sheet-tab[data-sheet="summary"], #summaryTab', () => {
+            // 1) give the cache paint its own request id
+            window._gtsReqId = window._gtsReqId || 0;
+            const reqId = ++window._gtsReqId;
+
+            const cachedNow = getGtsTotalsFromStorage() || window.sheetTotals || {};
+            const gts = {
+                material: Number(cachedNow.material) || 0,
+                shipping: Number(cachedNow.shipping) || 0
+            };
+
+            // cache paint + investment
+            fetchInvestmentTotal().then(investment => {
+                // extra safety: don't let cache overwrite a newer render
+                if (reqId < (window._gtsAppliedReqId || 0)) return;
+                window.sheetTotals = { ...window.sheetTotals, ...gts, investment };
+                renderSummaryFromGtsTotals({ ...gts, investment }, 'tab-cache', reqId);
+            });
+
+            // 2) kick a fresh server repaint (it will use its own reqId internally)
+            refreshSummaryFromServer('tab-fresh');
+        });
+
+    // Live updates from Materials → Summary (keep!)
+    $(document)
+        .off('gts:totalsUpdated.summary')
+        .on('gts:totalsUpdated.summary', (_e, p) => {
+            const gts = { material: +p.material || 0, shipping: +p.shipping || 0 };
+            window.sheetTotals = { ...window.sheetTotals, ...gts };
+            renderSummaryFromGtsTotals({ ...gts, investment: +window.sheetTotals?.investment || 0 }, 'bridge');
+        });
+
+    $(document)
+        .off('click.sheetSwap')
+        .on('click.sheetSwap', '.sheet-tab', function () {
+            const key = $(this).data('sheet');
+            // remember active sheet for other logic that reads it
+            localStorage.setItem('activeSheet', key);
+
+            // toggle sections (adjust IDs/selectors to your DOM)
+            $('.sheet-section').addClass('hidden');
+            $(`#sheet-${key}`).removeClass('hidden');
+        });
+
+    $(document)
+        .off('customerSheets:totalsUpdated.summary')      // kill old namespace if present
+        .off('customerSheets:totalsUpdated.summaryInit')
+        .on('customerSheets:totalsUpdated.summaryInit', (/*e*/) => {
+            if (!$('#sheet-summary').is(':visible')) return;
+
+            // debounce to avoid thrash
+            clearTimeout(window.__summaryDomBridgeDebounce);
+            window.__summaryDomBridgeDebounce = setTimeout(() => {
+                const all = (typeof getAllCustomerSheetTotals === 'function')
+                    ? getAllCustomerSheetTotals()
+                    : { material: 0, shipping: 0 };
+
+                const mat = Number(all.material) || 0;
+                const ship = Number(all.shipping) || 0;
+                var inv = (_lastGoodSummary && _lastGoodSummary.investment != null
+                    ? Number(_lastGoodSummary.investment) || 0
+                    : (window.sheetTotals && window.sheetTotals.investment != null
+                        ? Number(window.sheetTotals.investment) || 0
+                        : 0));
+
+                // only repaint when we actually have numbers; otherwise keep last good
+                if (mat > 0 || ship > 0 || inv > 0) {
+                    renderSummaryFromGtsTotals({ material: mat, shipping: ship, investment: inv }, 'bridge:init');
+                } else if (_lastGoodSummary) {
+                    renderSummaryFromGtsTotals(_lastGoodSummary, 'bridge:init-skip-zero');
+                }
+            }, 80);
+        });
 }
 
-function renderCashInBreakdown(sources = {}) {
-    ensureCashInSkeleton(); // create fixed cards once
+function refreshSummaryFromServer() {
+    // temporary loading state (optional)
+    $('#summaryMaterial, #summaryShipping, #summaryInvestment, #summaryRemaining').text('…');
+    return fetchGtsTotalsForSummary(); // paints UI when fresh data arrives
+}
 
-    // Merge with last snapshot so partial calls don't blank cards
-    const prev = window._ciLast || {};
-    const merged = {
-        us: { ...prev.us, ...sources.us },
-        sq: { ...prev.sq, ...sources.sq },
-        local: { ...prev.local, ...sources.local },
-        customer: { hasShipping: true, ...prev.customer, ...sources.customer }
-    };
-    window._ciLast = merged;
+function fetchInvestmentTotal() {
+    return $.getJSON('/gts-investments/total')
+        .then(res => Number(res?.total) || 0)
+        .catch(() => 0);
+}
 
-    // Paint cards
-    updateCashInCard('us', Number(merged.us?.material) || 0, 0, false);
-    updateCashInCard('sq', Number(merged.sq?.material) || 0, 0, false);
-    updateCashInCard('local', Number(merged.local?.material) || 0, 0, false);
+// --- Summary totals: fetch from server (POST) ---
+const TOTALS_URL =
+  document.getElementById('summary-root')?.dataset.totalsUrl ||
+  '/gts-materials/total';
 
-    const c = merged.customer || {};
-    updateCashInCard('customer',
-        Number(c.material) || 0,
-        Number(c.shipping) || 0,
-        c.hasShipping !== false
-    );
+function fetchGtsTotalsForSummary() {
+  const reqId = ++_summaryReqId;
 
-    // Totals
-    const grand =
-        (Number(merged.us?.material) || 0) +
-        (Number(merged.sq?.material) || 0) +
-        (Number(merged.local?.material) || 0) +
-        (Number(c.material) || 0) +
-        ((c.hasShipping === false) ? 0 : (Number(c.shipping) || 0));
+  return $.getJSON(TOTALS_URL)
+    .done(function (res) {
+      if (reqId !== _summaryReqId) return;
 
-    $('#cashInGrandTotal').text(fmtAED(grand));
+      const mat = Number(res?.material) || 0;
+      const ship = Number(res?.shipping) || 0;
+      const inv  = Number(window.sheetTotals?.investment) || 0;
+
+      // Don’t let a “0/0” server blip wipe good UI
+      const hadGood = (_lastGoodSummary.material > 0 || _lastGoodSummary.shipping > 0);
+      const allowZero = !hadGood; // only allow zero on the very first authoritative paint
+
+      renderSummaryFromGtsTotals(
+        { material: mat, shipping: ship, investment: inv },
+        'gtsTotals',
+        reqId,
+        { allowZero }
+      );
+    })
+    .fail(function (xhr) {
+      console.error('gtsTotals failed', xhr.status, xhr.responseText);
+      // keep current UI on failure
+    });
+}
+
+function renderCashInBreakdown(data = {}, precomputedGrand = null) {
+    window._ciLast = data;
+
+    let grand = precomputedGrand;
+    if (grand == null) {
+        grand =
+            (Number(data.us?.material) || 0) +
+            (Number(data.sq?.material) || 0) +
+            (Number(data.local?.material) || 0);
+        if (Array.isArray(data.customers)) {
+            data.customers.forEach(c => {
+                grand += Number(c.material || 0) + Number(c.shipping || 0);
+            });
+        }
+    }
+
     $('#cashInAmount').text(fmtAED(grand));
 
     const cashOut = getNum('#cashOutAmount');
@@ -2392,7 +2565,7 @@ function renderCashInBreakdown(sources = {}) {
     scheduleChartUpdate(grand, cashOut, profit, !window._chartIntroPlayed);
 
     // Table
-    renderCashInTable(merged, grand);
+    renderCashInTable(data, grand);
 }
 
 // --- Debounced refresher (file-scope) ---
@@ -2506,60 +2679,22 @@ function renderCashInTable(cashInSources, precomputedGrand = null) {
 }
 
 function fetchCustomerSheetsRows() {
-    return $.ajax({
-        url: '/summary/customer-sheets/rows',
-        data: { _t: Date.now() },   // cache-buster
-        dataType: 'json',
-        cache: false
-    }).fail((xhr) => {
-        console.error('rows fetch failed:', xhr.status, xhr.responseText);
-    });
-}
-
-function renderCustomerSheetsTable(rows) {
-    const $body = $('#customerSheetsTableBody').empty();
-    let grand = 0;
-
-    if (!rows || rows.length === 0) {
-        $body.append('<tr><td colspan="4" class="px-4 py-4 text-center text-gray-500">No customer sheets yet.</td></tr>');
-        $('#customerSheetsTableGrand').text('AED 0.00');
-        return;
-    }
-
-    rows.forEach(r => {
-        const m = Number(r.material || 0);
-        const s = Number(r.shipping || 0);
-        const t = m + s; grand += t;
-        $body.append(`
-      <tr>
-        <td class="px-4 py-3 text-gray-700">${r.name}</td>
-        <td class="px-4 py-3 text-right">${fmtAED(m)}</td>
-        <td class="px-4 py-3 text-right">${fmtAED(s)}</td>
-        <td class="px-4 py-3 text-right font-semibold">${fmtAED(t)}</td>
-      </tr>
-    `);
-    });
-
-    $('#customerSheetsTableGrand').text(fmtAED(grand));
-}
-
-function collectCustomerSheetsRowsFromDOM() {
-    const rows = [];
-    // each customer sheet section we created has: <input type="hidden" id="customer-sheet-id" value="...">
-    $('.sheet-section').each(function () {
-        const sid = $(this).find('#customer-sheet-id').val(); // local scope find is OK even if IDs repeat
-        if (!sid) return;
-
-        // Try to get a readable name
-        let name = $(this).find('h2').first().text().replace(/Customer Sheet:\s*/i, '').trim();
-        if (!name) name = `Sheet ${sid}`;
-
-        const material = getNum(`#totalMaterial-${sid}`);
-        const shipping = getNum(`#totalShipping-${sid}`);
-        // Always push (even 0s) so new empty sheets still show
-        rows.push({ name, material, shipping });
-    });
-    return rows;
+    return $.getJSON('/summary/customer-sheets/rows', { _t: Date.now() })
+        .then(res => {
+            // Accept either `{rows:[...]}` or plain array `[...]`
+            const arr = Array.isArray(res?.rows) ? res.rows : (Array.isArray(res) ? res : []);
+            // Normalize fields + numbers to be safe
+            const rows = arr.map(r => ({
+                name: r.name || r.sheet || '-',                 // display label
+                material: Number(r.material) || 0,
+                shipping: Number(r.shipping) || 0,
+            }));
+            return { rows };
+        })
+        .catch(xhr => {
+            console.error('rows fetch failed:', xhr.status, xhr.responseText);
+            return { rows: [] };
+        });
 }
 
 function ensureKpiStickyBackdrop() {

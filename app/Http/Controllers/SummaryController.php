@@ -18,26 +18,64 @@ class SummaryController extends Controller
         return view('sheets.summary_sheet');
     }
 
-    public function getSummaryData()
+    public function getSummaryData(Request $request)
     {
-        // Match what the GTS table shows: prefer total_material; fallback to total_material_buy
-        $totalPurchase = (float) DB::table('gts_materials')
-            ->sum(DB::raw('COALESCE(total_material, total_material_buy, 0)'));
+        // If you want to mirror "posted only", turn this on via ?only_posted=1
+        $onlyPosted = $request->boolean('only_posted', false);
 
-        // Shipping: if you already calculate a combined total in the table, keep your current logic.
-        // Otherwise (recommended) use the same formula you use on the GTS page:
-        $totalShipping = (float) DB::table('gts_materials')
-            ->sum(DB::raw('COALESCE(shipping_cost,0) + COALESCE(dgd,0) + COALESCE(labour,0)'));
+        // Base filter that matches your Materials table
+        $base = DB::table('gts_materials as m');
+        if ($onlyPosted && Schema::hasColumn('gts_materials', 'status')) {
+            $base->where('m.status', true);
+        }
+        if (Schema::hasColumn('gts_materials', 'deleted_at')) {
+            $base->whereNull('m.deleted_at');
+        }
+        if ($request->filled('from')) {
+            $base->whereDate('m.invoice_date', '>=', $request->input('from'));
+        }
+        if ($request->filled('to')) {
+            $base->whereDate('m.invoice_date', '<=', $request->input('to'));
+        }
 
-        $cashOut = $totalPurchase + $totalShipping;
+        // Resolve IDs once so we can safely aggregate without join blow-ups
+        $ids = (clone $base)->pluck('m.id');
+        if ($ids->isEmpty()) {
+            return response()->json([
+                'total_purchase_of_material' => 0.00,
+                'total_shipping_cost'        => 0.00,
+                'cash_out'                   => 0.00,
+                'cash_in'                    => 0.00,
+                'profit'                     => 0.00,
+            ])->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+        }
+
+        // MATERIAL — exactly like the "Total Material" column in the grid:
+        // sum of (units * unit_price + vat) over gts_materials_items
+        $material = (float) DB::table('gts_materials_items as i')
+            ->whereIn('i.material_id', $ids)
+            ->selectRaw('ROUND(SUM(COALESCE(i.units,0)*COALESCE(i.unit_price,0) + COALESCE(i.vat,0)), 2) as s')
+            ->value('s');
+
+        // SHIPPING — prefer persisted total_shipping_cost if the column exists
+        $shippingSql = Schema::hasColumn('gts_materials', 'total_shipping_cost')
+            ? 'ROUND(SUM(COALESCE(m.total_shipping_cost, COALESCE(m.shipping_cost,0)+COALESCE(m.dgd,0)+COALESCE(m.labour,0))), 2) as s'
+            : 'ROUND(SUM(COALESCE(m.shipping_cost,0)+COALESCE(m.dgd,0)+COALESCE(m.labour,0)), 2) as s';
+
+        $shipping = (float) DB::table('gts_materials as m')
+            ->whereIn('m.id', $ids)
+            ->selectRaw($shippingSql)
+            ->value('s');
+
+        $cashOut = round($material + $shipping, 2);
 
         return response()->json([
-            'total_purchase_of_material' => $totalPurchase,
-            'total_shipping_cost'        => $totalShipping,
+            'total_purchase_of_material' => $material,
+            'total_shipping_cost'        => $shipping,
             'cash_out'                   => $cashOut,
             'cash_in'                    => 0,
             'profit'                     => 0 - $cashOut,
-        ]);
+        ])->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
     }
 
     public function getCashInBreakdown()
@@ -53,23 +91,29 @@ class SummaryController extends Controller
 
         foreach ($sheets as $sheet) {
             try {
-                $material = DB::table($sheet['table'])->sum('total_material');
-                $shipping = DB::table($sheet['table'])->sum('shipping_cost');
-                $total = $material + $shipping;
+                $totals = DB::table($sheet['table'])
+                    ->selectRaw(
+                        'COALESCE(SUM(total_material),0) AS material, '
+                        . 'COALESCE(SUM(shipping_cost),0) AS shipping'
+                    )
+                    ->first();
+
+                $material = (float) ($totals->material ?? 0);
+                $shipping = (float) ($totals->shipping ?? 0);
 
                 $data[] = [
                     'sheet' => $sheet['name'],
                     'material' => $material,
                     'shipping' => $shipping,
-                    'total' => $total,
+                    'total'    => $material + $shipping,
                 ];
-            } catch (\Exception $e) {
+            } catch (\Throwable $e) {
                 $data[] = [
                     'sheet' => $sheet['name'],
                     'material' => 0,
                     'shipping' => 0,
                     'total' => 0,
-                    'error' => $e->getMessage()
+                    'error' => $e->getMessage(),
                 ];
             }
         }
@@ -206,29 +250,22 @@ class SummaryController extends Controller
 
     private function computeLocalSalesTotal(): float
     {
-        $rows = DB::table('locals as l')
-            ->leftJoin('local_items as it', 'it.local_id', '=', 'l.id')
-            ->groupBy('l.id', 'l.total_inc_vat', 'l.total_ex_vat', 'l.vat_amount')
-            ->select(
-                'l.id',
-                'l.total_inc_vat',
-                'l.total_ex_vat',
-                'l.vat_amount',
-                DB::raw('COALESCE(SUM(COALESCE(it.total_inc_vat, (COALESCE(it.units,0)*COALESCE(it.unit_price,0)) + COALESCE(it.vat,0))),0) as items_inc')
-            )
-            ->get();
+        $sub = DB::table('local_items')
+            ->selectRaw('local_id, '
+                . 'SUM(COALESCE(total_inc_vat, '
+                . '(COALESCE(units,0)*COALESCE(unit_price,0)) + COALESCE(vat,0))) AS items_inc')
+            ->groupBy('local_id');
 
-        $grand = 0.0;
-        foreach ($rows as $r) {
-            if ($r->total_inc_vat !== null) {
-                $grand += (float) $r->total_inc_vat;
-            } elseif ($r->items_inc > 0) {
-                $grand += (float) $r->items_inc;
-            } else {
-                $grand += (float) ($r->total_ex_vat ?? 0) + (float) ($r->vat_amount ?? 0);
-            }
-        }
-        return round($grand, 2);
+        $grand = DB::table('locals as l')
+            ->leftJoinSub($sub, 'it', 'it.local_id', '=', 'l.id')
+            ->selectRaw('SUM(CASE '
+                . 'WHEN l.total_inc_vat IS NOT NULL THEN l.total_inc_vat '
+                . 'WHEN COALESCE(it.items_inc,0) > 0 THEN it.items_inc '
+                . 'ELSE COALESCE(l.total_ex_vat,0) + COALESCE(l.vat_amount,0) '
+                . 'END) AS grand')
+            ->value('grand');
+
+        return round((float) ($grand ?? 0), 2);
     }
 
     public function sqTotal(): \Illuminate\Http\JsonResponse

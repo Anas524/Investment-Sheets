@@ -16,6 +16,9 @@ use App\Http\Controllers\SummaryController;
 use App\Http\Controllers\UserPreferenceController;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 // Homepage
 Route::get('/', [InvestmentController::class, 'index'])->name('index');
@@ -144,4 +147,60 @@ Route::prefix('beneficiaries')->group(function () {
 });
 
 Route::get('/customer-sheet/section/{sheet}', [CustomerSheetController::class, 'section'])
-     ->name('customer.sheet.section');
+    ->name('customer.sheet.section');
+
+
+Route::get('/gts-materials/total', function (Request $request) {
+    $table = 'gts_materials';
+    if (!Schema::hasTable($table)) {
+        return response()->json(['message' => "Table '$table' does not exist"], 500);
+    }
+
+    $cols = Schema::getColumnListing($table);
+    $q = DB::table($table);
+
+    // --- make server totals match the list ---
+
+    // 1) Exclude soft-deleted and “deleted” flags if present
+    if (in_array('deleted_at', $cols)) $q->whereNull('deleted_at');
+    foreach (['deleted','is_deleted','archived'] as $flag) {
+        if (in_array($flag, $cols)) $q->where($flag, 0);
+    }
+
+    // 2) Optional: only “posted” rows when requested
+    if ($request->boolean('only_posted')) {
+        if (in_array('posted', $cols)) {
+            $q->where('posted', 1);
+        } elseif (in_array('is_posted', $cols)) {
+            $q->where('is_posted', 1);
+        } elseif (in_array('status', $cols)) {
+            $q->whereIn('status', ['posted','approved','completed']);
+        }
+    }
+
+    // 3) EXACT columns used by Materials header cards
+    $materialCol = in_array('total_material_buy', $cols)
+        ? 'total_material_buy'
+        : (in_array('total_material', $cols) ? 'total_material' : null);
+    $material = $materialCol ? (clone $q)->sum($materialCol) : 0;
+
+    // shipping = total_shipping_cost if present, else parts
+    $shipExpr = in_array('total_shipping_cost', $cols)
+        ? 'COALESCE(total_shipping_cost,0)'
+        : implode('+', array_map(fn($c) => "COALESCE($c,0)",
+            array_values(array_filter(['shipping_cost','dgd','labour'], fn($c)=>in_array($c,$cols)))
+          ));
+    $shipping = (float) (clone $q)->sum(DB::raw($shipExpr));
+
+    return response()->json([
+        'material'   => round($material, 2),
+        'shipping'   => round($shipping, 2),
+        'investment' => 0,
+        // optional debug to compare with the list
+        '_debug' => [
+            'matchedRows'  => (clone $q)->count(),
+            'materialCol'  => $materialCol,
+            'shippingExpr' => $shipExpr,
+        ],
+    ]);
+})->name('gts.totals');

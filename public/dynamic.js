@@ -1,4 +1,6 @@
-let $activeInput = null;
+$(function () {
+  fetchAndUpdateInvestmentTotal();
+});
 
 function initMaterialLogic() {
   $.ajaxSetup({
@@ -223,6 +225,12 @@ function initMaterialLogic() {
 
     // Trigger initial calculation
     calculateRowTotals($detailRow, $headerRow);
+
+    // create initial snapshot for new draft row
+    $detailRow.data('snapshot', buildMaterialSnapshot($detailRow));
+
+    // drafts are not submitted/loaded -> icon stays hidden (fine)
+    toggleUpdateButtonForDetail($detailRow);
   });
 
   // On blur or input: adjust based on content
@@ -257,38 +265,6 @@ function initMaterialLogic() {
       "resize": "none",
       "overflow": "hidden"
     });
-  });
-
-  $(document).on("input", ".editable-input, .dynamic-textarea", function () {
-    const $this = $(this);
-    const $detailRow = $this.closest(".detail-row");
-
-    // Tooltip only if loaded from DB
-    if ($detailRow.attr("data-loaded") !== "true") {
-      return;
-    }
-
-    // Auto-resize for textarea
-    if ($this.is("textarea")) {
-      this.style.height = "auto";
-      this.style.height = this.scrollHeight + "px";
-
-      $this.css({
-        "border": "1px solid #ccc",
-        "background": "#fff",
-        "outline": "none",
-        "box-shadow": "none",
-        "resize": "none",
-        "overflow": "hidden"
-      });
-    }
-
-    $this.addClass("field-changed");
-
-    const $tooltip = $("#saveTooltipBtn");
-    if ($tooltip.length) {
-      $tooltip.removeClass("hidden").fadeIn();
-    }
   });
 
   // Also handle on blur (in case user tabs out)
@@ -334,6 +310,18 @@ function initMaterialLogic() {
     updateGtsTotalsFromDOM();
   });
 
+  // Ensure summary-footer inputs (shipping/dgd/labour) also toggle the Update button
+  $(document).on('input change', '.detail-row .shipping-input', function () {
+    const $detailRow = $(this).closest('.detail-row');
+    const $headerRow = $detailRow.prev('.header-row');
+
+    // keep totals right while typing
+    calculateRowTotals($detailRow, $headerRow);
+
+    // show/hide Update Row button based on diff
+    toggleUpdateButtonForDetail($detailRow);
+  });
+
   // auto-grow the description textarea
   $(document).on("input", ".material-input[data-field='description']", function () {
     this.style.height = "auto";
@@ -368,16 +356,6 @@ function initMaterialLogic() {
     // Mark detail row as dirty
     $detailRow.data("dirty", true);
 
-    // If already submitted, show Save Changes button
-    if ($detailRow.hasClass("submitted")) {
-      const $actionCell = $headerRow.find("td:last");
-      if (!$actionCell.find(".save-changes-btn").length) {
-        $actionCell.html(`
-        <button class="save-changes-btn bg-green-600 text-white px-2 py-1 rounded">Save Changes</button>
-      `);
-      }
-    }
-
     // Recalculate row + overall totals
     $(".detail-row").each(function () {
       const $row = $(this);
@@ -385,6 +363,9 @@ function initMaterialLogic() {
       calculateRowTotals($row, $header);
     });
     updateGtsTotalsFromDOM();
+
+    // Now, after everything: re-check if update button should show
+    toggleUpdateButtonForDetail($detailRow);
   });
 
   $(document).on("click", ".remove-row", function () {
@@ -484,18 +465,72 @@ function initMaterialLogic() {
         // Mark the detail row as submitted
         $detailRow.addClass("submitted");
 
-        updateGtsTotalsFromDOM();
-
         // Replace action cell content with Delete button only
         $headerRow.find("td:last").html(`
           <button class="delete-material-btn bg-red-500 text-white px-2 py-1 rounded ml-2">Delete</button>
        `);
 
-        location.reload();
+        updateGtsTotalsFromDOM();
+        fetchAndUpdateInvestmentTotal();
       },
       error: function (xhr) {
         console.error("Error saving material:", xhr.responseText);
         alert("Failed to save. See console for details.");
+      }
+    });
+  });
+
+  // Update material row from action column
+  $(document).on("click", ".update-material-btn", function () {
+    const $headerRow = $(this).closest("tr.header-row");
+    const $detailRow = $headerRow.next(".detail-row");
+    const id = $headerRow.data("id");
+
+    if (!id) {
+      alert("Row ID missing, cannot update.");
+      return;
+    }
+
+    // Current snapshot
+    const prevSnap = $detailRow.data("snapshot") || {};
+    const newSnap = buildMaterialSnapshot($detailRow);
+
+    // Compare snapshots
+    if (JSON.stringify(prevSnap) === JSON.stringify(newSnap)) {
+      // nothing to save; keep button hidden anyway
+      return;
+    }
+
+    // Build payload
+    const data = {
+      mode_of_transaction: newSnap.mot,
+      receipt_no: newSnap.receipt,
+      remarks: newSnap.remarks,
+      shipping_cost: newSnap.shipping,
+      dgd: newSnap.dgd,
+      labour: newSnap.labour,
+      materials: newSnap.items
+    };
+
+    $.ajax({
+      url: `/gts-materials/${id}`,
+      method: "PUT",
+      headers: { "X-CSRF-TOKEN": $('meta[name="csrf-token"]').attr("content") },
+      data: data,
+      success: function () {
+        // refresh snapshot and hide button
+        $detailRow.data("snapshot", newSnap);
+        toggleUpdateButtonForDetail($detailRow);
+
+        // green flash
+        $detailRow.find("input, textarea").removeClass("field-changed").addClass("bg-green-100");
+        setTimeout(() => $detailRow.find("input, textarea").removeClass("bg-green-100"), 1000);
+
+        alert("Row updated successfully.");
+      },
+      error: function (xhr) {
+        console.error(xhr.responseText);
+        alert("Failed to update row.");
       }
     });
   });
@@ -536,7 +571,8 @@ function initMaterialLogic() {
         updateGtsTotalsFromDOM();
 
         $("#deleteConfirmModal").addClass("hidden").removeClass("flex");
-        location.reload();
+        updateGtsTotalsFromDOM();
+        fetchAndUpdateInvestmentTotal();
       },
       error: function (xhr) {
         console.error(xhr.responseText);
@@ -557,6 +593,10 @@ function initMaterialLogic() {
     } else {
       // Just remove from DOM if unsaved
       $rowToDelete.remove();
+
+      // Re-check if update button is needed
+      const $detailRow = $rowToDelete.closest('.detail-row');
+      toggleUpdateButtonForDetail($detailRow);
     }
   });
 
@@ -574,6 +614,11 @@ function initMaterialLogic() {
       success: function () {
         $rowToDelete.remove();
         $("#confirmItemDeleteModal").addClass("hidden");
+
+        // Re-check after deletion
+        const $detailRow = $rowToDelete.closest('.detail-row');
+        toggleUpdateButtonForDetail($detailRow);
+
         $rowToDelete = null;
       },
       error: function (xhr) {
@@ -586,181 +631,6 @@ function initMaterialLogic() {
   $("#cancelItemDeleteBtn").on("click", function () {
     $("#confirmItemDeleteModal").addClass("hidden");
     $rowToDelete = null;
-  });
-
-
-  let originalValue = '';
-  let fieldOriginalValues = new Map();
-
-  // Store original value on focus
-  $(document).on("focusin", "input:not([type='hidden']), textarea", function () {
-    fieldOriginalValues.set(this, $(this).val().trim());
-  });
-
-  // On input, compare with original and toggle tooltip + highlight
-  $(document).on("input", "input:not([type='hidden']), textarea", function () {
-    const $input = $(this);
-
-    // Skip tooltip logic if inside the modal
-    if ($input.closest("#addRowModal").length > 0) {
-      return;
-    }
-
-    const newValue = $input.val().trim();
-    const original = fieldOriginalValues.get(this) || "";
-
-    $activeInput = $input;
-
-    const tooltip = $("#saveTooltipBtn");
-    const $cell = $input.closest("td");
-
-    // Safety: Only move tooltip if it exists
-    if (tooltip.length > 0 && !$.contains($cell[0], tooltip[0])) {
-      tooltip.detach().appendTo($cell);
-    }
-
-    if (newValue !== original) {
-      $input.addClass("field-changed");
-
-      tooltip.css({
-        position: "absolute",
-        top: $input.position().top + $input.outerHeight() + 4,
-        left: $input.position().left,
-        zIndex: 9999
-      }).removeClass("hidden").fadeIn(150);
-    } else {
-      $input.removeClass("field-changed");
-      tooltip.addClass("hidden").hide();
-    }
-  });
-
-  // Hide tooltip if clicked elsewhere
-  $(document).on("click", function (e) {
-    if (
-      !$(e.target).closest("input, textarea, #saveTooltipBtn").length &&
-      $("#saveTooltipBtn").is(":visible")
-    ) {
-      $("#saveTooltipBtn").addClass("hidden");
-    }
-  });
-
-  // Save logic
-  $(document).on("click", "#saveTooltipBtn", function () {
-    if (!$activeInput || $activeInput.length === 0) {
-      console.warn("No active input found.");
-      return;
-    }
-
-    const newValue = $activeInput.val().trim();
-    const originalValue = fieldOriginalValues.get($activeInput[0]) || "";
-
-    if (newValue === originalValue) {
-      $(this).addClass("hidden");
-      return;
-    }
-
-    const $detailRow = $activeInput.closest(".detail-row");
-
-    const isLoaded = $detailRow.attr("data-loaded") === "true";
-
-    if (!$detailRow.hasClass("submitted") || !isLoaded) {
-      console.warn("Blocked tooltip: either not submitted or not loaded");
-      $(this).addClass("hidden");
-      return;
-    }
-
-    const $headerRow = $detailRow.prev(".header-row");
-    const id = $headerRow.data("id");
-
-    if (!id) {
-      console.error("Missing data-id on header row.");
-      return;
-    }
-
-    // Prepare data object to send updated values
-    const data = {
-      mode_of_transaction: $detailRow.find('input[placeholder="Enter Transaction Method"]').val().trim(),
-      receipt_no: $detailRow.find('textarea[placeholder="Enter receipt numbers"]').val().trim(),
-      remarks: $detailRow.find('textarea[placeholder="Enter Remarks"]').val().trim(),
-      shipping_cost: parseFloat($detailRow.find('[data-field="shippingCost"]').val()) || 0,
-      dgd: parseFloat($detailRow.find('[data-field="dgd"]').val()) || 0,
-      labour: parseFloat($detailRow.find('[data-field="labour"]').val()) || 0,
-      materials: []
-    };
-
-    // Handle all item rows, including new ones
-    $detailRow.find("tr.item-row").each(function () {
-      const $row = $(this);
-      const material = {
-        description: $row.find('[data-field="description"]').val().trim(),
-        units: parseFloat($row.find('[data-field="units"]').val()) || 0,
-        unit_price: parseFloat($row.find('[data-field="unitPrice"]').val()) || 0,
-        vat: parseFloat($row.find('[data-field="vat"]').val()) || 0,
-        weight_per_ctn: parseFloat($row.find('[data-field="weightPerCtn"]').val()) || 0,
-        ctns: parseFloat($row.find('[data-field="ctns"]').val()) || 0,
-      };
-
-      const itemId = $row.attr("data-item-id");
-      if (itemId) {
-        material.id = itemId; // Existing item
-      }
-
-      if ($row.attr("data-new") === "true") {
-        material._new = true; // Flag new row
-      }
-
-      data.materials.push(material);
-    });
-
-    $.ajax({
-      url: `/gts-materials/${id}`,
-      method: "PUT",
-      headers: {
-        "X-CSRF-TOKEN": $('meta[name="csrf-token"]').attr("content")
-      },
-      data: data,
-      success: function () {
-        // Reset changed field highlight
-        $detailRow.find(".field-changed").removeClass("field-changed");
-
-        // Green highlight on updated input
-        $activeInput.addClass("bg-green-100");
-        setTimeout(() => {
-          $activeInput.removeClass("bg-green-100");
-        }, 1000);
-
-        // Hide tooltip after 1.5s
-        setTimeout(() => {
-          $("#saveTooltipBtn").fadeOut();
-        }, 1500);
-
-        // Remove data-new attribute from all item rows after saving
-        $detailRow.find("tr.item-row[data-new='true']").each(function () {
-          $(this).removeAttr("data-new");
-        });
-
-        console.log("Updated successfully");
-      },
-      error: function (xhr) {
-        console.error(xhr.responseText);
-        alert("Update failed. Try again.");
-      }
-    });
-  });
-
-  $(document).on("input", "input, textarea", function () {
-    const $input = $(this);
-    const $detailRow = $input.closest(".detail-row");
-
-    const isSubmitted = $detailRow.hasClass("submitted");
-    const isLoaded = $detailRow.attr("data-loaded") === "true";
-
-    if (isSubmitted && isLoaded) {
-      $("#saveTooltipBtn").removeClass("hidden");
-    } else {
-      console.warn("Blocked tooltip on input: not submitted or not loaded");
-      $("#saveTooltipBtn").addClass("hidden");
-    }
   });
 
   // Upload Click
@@ -948,6 +818,120 @@ function initMaterialLogic() {
     }
   });
 
+  // ONE watcher for change detection in Materials
+  $(document).on('input change', '.detail-row input, .detail-row textarea', function () {
+    const $detailRow = $(this).closest('.detail-row');
+    if ($detailRow.attr('data-loaded') === 'true' || $detailRow.hasClass('submitted')) {
+      toggleUpdateButtonForDetail($detailRow);
+    }
+  });
+
+  // Submit updates from the Action icon (bind once, namespaced)
+  $(document)
+    .off('click.materialUpdate')                                  // prevent dup binds
+    .on('click.materialUpdate', '.update-row-btn', function (e) {
+      e.preventDefault();
+      e.stopPropagation(); // don't trigger header-row expand/collapse
+
+      const $headerRow = $(this).closest('tr.header-row');
+      const $detailRow = $headerRow.next('.detail-row');
+      const id = $headerRow.data('id');
+      if (!id) return;
+
+      // make sure totals are fresh
+      calculateRowTotals($detailRow, $headerRow);
+
+      // payload expected by your controller
+      const payload = {
+        mode_of_transaction: ($detailRow.find('input[placeholder="Enter Transaction Method"]').val() || '').trim(),
+        receipt_no: ($detailRow.find('textarea.receipt-no-textarea').val() || '').trim(),
+        remarks: ($detailRow.find('textarea[placeholder="Enter Remarks"]').val() || '').trim(),
+        shipping_cost: parseFloat($detailRow.find('[data-field="shippingCost"]').val()) || 0,
+        dgd: parseFloat($detailRow.find('[data-field="dgd"]').val()) || 0,
+        labour: parseFloat($detailRow.find('[data-field="labour"]').val()) || 0,
+        total_material: parseFloat(String($headerRow.find('.header-total-material').text()).replace(/[^\d.-]/g, '')) || 0,
+        total_shipping_cost: parseFloat(String($headerRow.find('.header-total-shipping').text()).replace(/[^\d.-]/g, '')) || 0,
+        materials: []
+      };
+
+      $detailRow.find('tr.item-row').each(function () {
+        const $r = $(this);
+        const m = {
+          description: ($r.find('[data-field="description"]').val() || '').trim(),
+          units: parseFloat($r.find('[data-field="units"]').val()) || 0,
+          unit_price: parseFloat($r.find('[data-field="unitPrice"]').val()) || 0,
+          vat: parseFloat($r.find('[data-field="vat"]').val()) || 0,
+          weight_per_ctn: parseFloat($r.find('[data-field="weightPerCtn"]').val()) || 0,
+          ctns: parseFloat($r.find('[data-field="ctns"]').val()) || 0
+        };
+        const itemId = $r.attr('data-item-id');
+        if (itemId) m.id = itemId;
+        payload.materials.push(m);
+      });
+
+      $.ajax({
+        url: `/gts-materials/${id}`,
+        method: 'PUT',
+        headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') },
+        data: payload
+      })
+        .done(function () {
+          // refresh snapshot to the just-saved state
+          $detailRow.data('snapshot', {
+            mot: String(payload.mode_of_transaction ?? '').trim(),
+            receipt: String(payload.receipt_no ?? '').trim(),
+            remarks: String(payload.remarks ?? '').trim(),
+            shipping: String($detailRow.find('[data-field="shippingCost"]').val() ?? '').trim(),
+            dgd: String($detailRow.find('[data-field="dgd"]').val() ?? '').trim(),
+            labour: String($detailRow.find('[data-field="labour"]').val() ?? '').trim(),
+            items: payload.materials.map(m => ({
+              id: m.id || null,
+              desc: String(m.description ?? '').trim(),
+              units: String(m.units ?? '').trim(),
+              unit: String(m.unit_price ?? '').trim(),
+              vat: String(m.vat ?? '').trim(),
+              wctn: String(m.weight_per_ctn ?? '').trim(),
+              ctns: String(m.ctns ?? '').trim()
+            }))
+          });
+
+          // hide the icon + flash success
+          setMaterialRowDirty($detailRow, false);
+          const $cell = $headerRow.find('td:last').addClass('bg-green-50');
+          setTimeout(() => $cell.removeClass('bg-green-50'), 600);
+
+          // keep top totals in sync
+          updateGtsTotalsFromDOM();
+        })
+        .fail(function (xhr) {
+          alert(xhr?.responseJSON?.message || 'Update failed.');
+          console.error(xhr?.responseText || xhr);
+        });
+    });
+
+  // Any input change inside a material detail row => re-check diff
+  $(document).on('input change', '.detail-row input, .detail-row textarea', function () {
+    const $detailRow = $(this).closest('.detail-row');
+    if ($detailRow.attr('data-loaded') === 'true' || $detailRow.hasClass('submitted')) {
+      toggleUpdateButtonForDetail($detailRow);
+    }
+  });
+
+  // Recalc + re-format the summary footer whenever Shipping/DGD/Labour change
+  $(document).off('input.materialShip change.materialShip')
+    .on('input.materialShip change.materialShip',
+      '.detail-row input[data-field="shippingCost"], .detail-row input[data-field="dgd"], .detail-row input[data-field="labour"]',
+      function () {
+        const $detailRow = $(this).closest('.detail-row');
+        const $headerRow = $detailRow.prev('.header-row');
+
+        // Recompute totals for THIS row (keeps AED prefix correct)
+        calculateRowTotals($detailRow, $headerRow);
+
+        // Also keep the Action “Update” icon logic in sync
+        toggleUpdateButtonForDetail($detailRow);
+      });
+
 }
 
 function updateFileLabel(inputId, labelId) {
@@ -1020,49 +1004,89 @@ function calculateRowTotals($detailRow, $headerRow) {
 
 }
 
-// Top Screen Total Values
-function updateGtsTotalsFromDOM() {
-  let totalMaterial = 0;
-  let totalShipping = 0;
+// cache for cross-sheet values
+window.sheetTotals = {
+  material: 0,
+  shipping: 0,
+  investment: 0
+};
 
-  // Loop through all rows
-  $(".header-total-material").each(function () {
-    const val = parseFloat($(this).text().replace(/[^\d.-]/g, '')) || 0;
-    totalMaterial += val;
-  });
+function updateMaterialTotals(totalMaterial, totalShipping) {
+  const material = Number(totalMaterial) || 0;
+  const shipping = Number(totalShipping) || 0;
+  const investment = Number(window.sheetTotals?.investment) || 0; // add cached inv
 
-  $(".header-total-shipping").each(function () {
-    const val = parseFloat($(this).text().replace(/[^\d.-]/g, '')) || 0;
-    totalShipping += val;
-  });
+  window.sheetTotals.material = material;
+  window.sheetTotals.shipping = shipping;
 
-  // Update the DOM
-  $("#gtsMaterialTotal").text(`AED ${totalMaterial.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`);
-  $("#gtsShippingTotal").text(`AED ${totalShipping.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`);
+  // save for Summary cold-starts (now with inv too)
+  setGtsTotalsToStorage({ material, shipping, investment });
 
-  // NEW: cache + notify (so Summary can use the exact same totals)
-  const payload = { material: totalMaterial, shipping: totalShipping, updatedAt: Date.now() };
-  window.gtsTotals = payload;
-  try { localStorage.setItem('gtsTotals', JSON.stringify(payload)); } catch { }
-  document.dispatchEvent(new CustomEvent('gts:totals-changed', { detail: payload }));
+  // live update for open Summary tab
+  $(document).trigger('gts:totalsUpdated', [{ material, shipping, investment }]);
+
+  // native listeners
+  document.dispatchEvent(new CustomEvent('gts:totals-changed', {
+    detail: { material, shipping, investment }
+  }));
 }
 
-// function fetchGtsMaterialTotals() {
-//   $.ajax({
-//     url: '/gts-material-totals',
-//     method: 'GET',
-//     success: function (res) {
-//       const totalMaterial = res.total_material || 0;
-//       const totalShipping = res.total_shipping || 0;
+// helpers
+function setGtsTotalsToStorage(obj) {
+  try {
+    localStorage.setItem('gtsTotals', JSON.stringify({
+      material: Number(obj.material) || 0,
+      shipping: Number(obj.shipping) || 0,
+      investment: Number(obj.investment) || 0
+    }));
+  } catch { }
+}
 
-//       $("#totalMaterial").text(`AED ${totalMaterial.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`);
-//       $("#totalShipping").text(`AED ${totalShipping.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`);
-//     },
-//     error: function (xhr) {
-//       console.error("Error loading totals:", xhr.responseText);
-//     }
-//   });
-// }
+function getGtsTotalsFromStorage() {
+  try {
+    const raw = localStorage.getItem('gtsTotals');
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    return {
+      material: Number(String(o.material).replace(/[^\d.-]/g, '')) || 0,
+      shipping: Number(String(o.shipping).replace(/[^\d.-]/g, '')) || 0,
+      investment: Number(String(o.investment).replace(/[^\d.-]/g, '')) || 0
+    };
+  } catch { return null; }
+}
+
+function updateInvestmentTotals(investmentTotal) {
+  const investment = Number(investmentTotal) || 0;
+  window.sheetTotals.investment = investment;
+
+  // If you show the green card on Summary or Materials:
+  $('#totalInvestmentAmount-investment').text(
+    `AED ${investment.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  );
+
+  setGtsTotalsToStorage({
+    material: Number(window.sheetTotals.material) || 0,
+    shipping: Number(window.sheetTotals.shipping) || 0,
+    investment
+  });
+
+  // notify Summary so KPI Cash Out refreshes immediately
+  $(document).trigger('gts:totalsUpdated', [{
+    material: Number(window.sheetTotals.material) || 0,
+    shipping: Number(window.sheetTotals.shipping) || 0,
+    investment
+  }]);
+}
+
+function updateCombinedCard() {
+  const material = window.sheetTotals.material || 0;
+  const investment = window.sheetTotals.investment || 0;
+  const combined = material + investment;
+
+  $("#materialPlusInvestment").text(
+    `AED ${combined.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  );
+}
 
 function formatCurrency(value) {
   const number = Number(value) || 0;
@@ -1096,12 +1120,20 @@ function loadGtsMaterials() {
       });
 
       const actionButtons = `
-        <div class="flex gap-1">
-          ${createIconButton('upload-btn', 'bi-cloud-arrow-up-fill', 'Upload Attachments', 'bg-blue-500 hover:bg-blue-600 text-white', id)}
-          ${createIconButton('view-btn', 'bi bi-paperclip', 'View Attachments', 'bg-gray-700 hover:bg-gray-800 text-white', id)}
-          ${createIconButton('delete-material-btn', 'bi-trash-fill', 'Delete Row', 'bg-red-500 hover:bg-red-600 text-white', id)}
+        <div class="action-buttons flex justify-center gap-1">
+          ${createMaterialIcon('upload-btn', 'bi-cloud-arrow-up-fill', 'Upload Attachments', 'bg-blue-500 hover:bg-blue-600 text-white', id)}
+          ${createMaterialIcon('view-btn', 'bi-paperclip', 'View Attachments', 'bg-gray-700 hover:bg-gray-800 text-white', id)}
+          ${createMaterialIcon('delete-material-btn', 'bi-trash-fill', 'Delete Row', 'bg-red-500 hover:bg-red-600 text-white', id)}
         </div>
       `;
+
+      // compute exactly what the cards/summary use
+      const headerMat = Number(entry.total_material_buy ?? 0);  // NOT total_material
+      const headerShip = (entry.total_shipping_cost != null)
+        ? Number(entry.total_shipping_cost)
+        : (Number(entry.shipping_cost) || 0) +
+        (Number(entry.dgd) || 0) +
+        (Number(entry.labour) || 0);
 
       // Create header row
       const $headerRow = $(`
@@ -1111,8 +1143,8 @@ function loadGtsMaterials() {
           <td class="border p-2">${entry.invoice_no ?? '-'}</td>
           <td class="border p-2">${entry.supplier_name}</td>
           <td class="border p-2">${entry.brief_description}</td>
-          <td class="border p-2 header-total-material">${formatCurrency(entry.total_material)}</td>
-          <td class="border p-2 header-total-shipping">${formatCurrency(entry.total_shipping_cost)}</td>
+          <td class="border p-2 header-total-material">${formatCurrency(headerMat)}</td>
+          <td class="border p-2 header-total-shipping">${formatCurrency(headerShip)}</td>
           <td class="border p-2 text-center">
             <div class="flex flex-col items-center gap-1">
               ${actionButtons}
@@ -1316,6 +1348,10 @@ function loadGtsMaterials() {
           $itemTableBody.append($row);
         });
       }
+
+      // snapshot AFTER the row is fully rendered
+      $detailRow.data('snapshot', buildMaterialSnapshot($detailRow));
+      toggleUpdateButtonForDetail($detailRow);
     });
 
     $(".detail-row").each(function () {
@@ -1328,11 +1364,42 @@ function loadGtsMaterials() {
   });
 }
 
-function createIconButton(type, iconClass, tooltipText, btnClass = '', dataId = '') {
+// === keep top cards + cache in sync (Materials) ===
+function updateGtsTotalsFromDOM() {
+  let totalMaterial = 0;
+  let totalShipping = 0;
+
+  $('.header-total-material').each(function () {
+    totalMaterial += parseFloat(String($(this).text()).replace(/[^\d.-]/g, '')) || 0;
+  });
+  $('.header-total-shipping').each(function () {
+    totalShipping += parseFloat(String($(this).text()).replace(/[^\d.-]/g, '')) || 0;
+  });
+
+  // update the two cards on the Materials sheet
+  $('#gtsMaterialTotal').text(
+    `AED ${totalMaterial.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  );
+  $('#gtsShippingTotal').text(
+    `AED ${totalShipping.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  );
+
+  // push into the shared cache + notify Summary
+  if (typeof updateMaterialTotals === 'function') {
+    updateMaterialTotals(totalMaterial, totalShipping); // no zero guard
+  }
+}
+
+// Materials-only icon button factory (does not collide with Investment's createIconButton)
+function createMaterialIcon(type, iconClass, tooltipText, btnClass = '', dataId = '') {
+  // normalize icon class -> allow "bi-arrow-repeat" or "bi bi-arrow-repeat"
+  const icon = String(iconClass || '').trim();
+  const finalIcon = icon.startsWith('bi ') ? icon : `bi ${icon}`;
+
   return `
     <div class="relative group inline-block">
       <button class="${type} ${btnClass} px-2 py-1 rounded text-sm" data-id="${dataId}">
-        <i class="bi ${iconClass}"></i>
+        <i class="${finalIcon}" style="font-size:16px;line-height:1"></i>
       </button>
       <div class="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-1
                   scale-0 group-hover:scale-100 transition duration-200
@@ -1343,6 +1410,111 @@ function createIconButton(type, iconClass, tooltipText, btnClass = '', dataId = 
   `;
 }
 
+function setMaterialRowDirty($detailRow, dirty) {
+  const $headerRow = $detailRow.prev('.header-row');
+  if (!$headerRow.length) return;
+
+  const id = $headerRow.data('id');
+
+  // Rebuild default action buttons (upload, view, delete)
+  const defaultActions = `
+  <div class="action-buttons flex justify-center gap-1">
+    ${createMaterialIcon('upload-btn', 'bi-cloud-arrow-up-fill', 'Upload Attachments', 'bg-blue-500 hover:bg-blue-600 text-white', id || '')}
+    ${createMaterialIcon('view-btn', 'bi-paperclip', 'View Attachments', 'bg-gray-700 hover:bg-gray-800 text-white', id || '')}
+    ${createMaterialIcon('delete-material-btn', 'bi-trash-fill', 'Delete Row', 'bg-red-500 hover:bg-red-600 text-white', id || '')}
+  </div>`;
+
+  const saveBtn = createMaterialIcon(
+    'update-row-btn',
+    'bi-arrow-repeat',              // <<< your preferred icon
+    'Update Row',
+    'bg-green-600 hover:bg-green-700 text-white',
+    id || ''
+  );
+
+  const $cell = $headerRow.find('td:last > div');
+  if (!$cell.length) return;
+
+  if (dirty) {
+    // Show Save button to the LEFT of the normal actions (no duplicates)
+    if ($headerRow.find('.update-row-btn').length === 0) {
+      $cell.prepend(saveBtn);
+    }
+  } else {
+    // Remove save button if no changes
+    $headerRow.find('.update-row-btn').remove();
+    // Ensure default actions exist (in case of previous replacements)
+    if (!$cell.find('.upload-btn').length) $cell.html(defaultActions);
+  }
+}
+
+// Build a snapshot of a detail row for change detection
+function buildMaterialSnapshot($detailRow) {
+  const t = v => (v == null ? '' : String(v).trim()); // store typed text
+
+  const snap = {
+    mot: t($detailRow.find('input[placeholder="Enter Transaction Method"]').val()),
+    receipt: t(($detailRow.find('textarea.receipt-no-textarea').val() || '').replace(/\r/g, '')),
+    remarks: t($detailRow.find('textarea[placeholder="Enter Remarks"]').val()),
+    sshipping: t($detailRow.find('input[data-field="shippingCost"]').val()),
+    dgd: t($detailRow.find('input[data-field="dgd"]').val()),
+    labour: t($detailRow.find('input[data-field="labour"]').val()),
+    items: []
+  };
+
+  $detailRow.find('tr.item-row').each(function () {
+    const $r = $(this);
+    snap.items.push({
+      id: $r.attr('data-item-id') || null,
+      desc: t($r.find('[data-field="description"]').val()),
+      units: t($r.find('[data-field="units"]').val()),
+      unit: t($r.find('[data-field="unitPrice"]').val()),
+      vat: t($r.find('[data-field="vat"]').val()),
+      wctn: t($r.find('[data-field="weightPerCtn"]').val()),
+      ctns: t($r.find('[data-field="ctns"]').val())
+    });
+  });
+
+  return snap;
+}
+
+// Compare current vs snapshot (numeric-safe)
+function isDetailChanged($detailRow) {
+  const prev = $detailRow.data('snapshot') || {};
+  const curr = buildMaterialSnapshot($detailRow);
+  return JSON.stringify(prev) !== JSON.stringify(curr);
+}
+
+// Ensure the icon exists once in Action cell when changed; remove when not
+function toggleUpdateButtonForDetail($detailRow) {
+  const $headerRow = $detailRow.prev('.header-row');
+  const $actionCell = $headerRow.find('td:last');
+
+  // we only show update for submitted/loaded rows
+  const isSaved = $detailRow.hasClass('submitted') || $detailRow.attr('data-loaded') === 'true';
+  const changed = isSaved && isDetailChanged($detailRow);
+
+  // make sure there is a single action container
+  let $wrap = $actionCell.find('.action-buttons');
+  if (!$wrap.length) {
+    $wrap = $('<div class="action-buttons flex justify-center gap-1"></div>');
+    // move any existing action buttons into this wrapper once
+    $wrap.append($actionCell.children().detach());
+    $actionCell.empty().append($wrap);
+  }
+
+  if (changed) {
+    if (!$wrap.find('.update-row-btn').length) {
+      // add exactly once
+      $wrap.prepend(
+        createMaterialIcon('update-row-btn', 'bi-arrow-repeat', 'Update Row',
+          'bg-green-600 hover:bg-green-700 text-white', $headerRow.data('id') || '')
+      );
+    }
+  } else {
+    $wrap.find('.update-row-btn').remove(); // remove if no longer dirty
+  }
+}
 
 function initInvestmentLogic() {
   $.ajaxSetup({
@@ -1623,18 +1795,10 @@ function initInvestmentLogic() {
     });
   });
 
-  $(document).on("focusin", ".investment-detail-row input, .investment-detail-row select, .investment-detail-row textarea", function () {
-    const $form = $(this).closest("form");
-
-    const snapshot = {};
-    $form.find("input, select, textarea").each(function () {
-      const name = $(this).attr("name") || $(this).attr("class");
-      let val = $(this).val();
-      if ($(this).is("input[type='number']")) val = parseFloat(val) || 0;
-      snapshot[name] = val?.toString().trim() || "";
-    });
-
-    $form.data("snapshot", snapshot);
+  // ANY edit inside an investment detail row => toggle action Update icon
+  $(document).on('input change', '.investment-detail-row input, .investment-detail-row select, .investment-detail-row textarea', function () {
+    const $detailRow = $(this).closest('.investment-detail-row');
+    toggleUpdateButtonForInvestment($detailRow);
   });
 
   console.log("Count:", $(".investment-amount-display").length);
@@ -1870,6 +2034,65 @@ function initInvestmentLogic() {
     });
   });
 
+  // submit updates from the green icon in Action column
+  $(document)
+    .off('click.investUpdate')
+    .on('click.investUpdate', '.update-invest-btn', function () {
+      const $headerRow = $(this).closest('tr.investment-header');
+      const $detailRow = $headerRow.next('.investment-detail-row');
+      const id = $headerRow.data('id');
+      if (!id) return;
+
+      const $f = $detailRow.find('form');
+
+      const payload = {
+        date: $f.find('.investment-date').val(),
+        investor: $f.find('.investment-investor').val(),
+        investment_amount: parseFloat($f.find('.investment-amount').val()) || 0,
+        investment_no: $f.find('.investment-no').val(),
+        mode_of_transaction: $f.find('.mode-of-transaction').val(),
+        murabaha: $f.find('.murabaha-input').val(),
+        repayment_terms: $f.find('.repayment-terms').val(),
+        loan_tenure: parseInt($f.find('.loan-tenure').val()) || 0,
+        repayment_date: $f.find('.repayment-date').val(),
+        remarks: $f.find('.remarks').val(),
+        payment_method: $f.find('.payment-method').val() || '',
+        murabaha_status: $detailRow.find('input.murabaha-radio:checked').val() || 'no',
+        murabaha_date: $detailRow.find('.murabaha-date-hidden').val() || ''
+      };
+
+      $.ajax({
+        url: `/investments/${id}`,
+        method: 'PUT',
+        headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') },
+        data: payload
+      })
+        .done(function () {
+          // header refresh
+          const formattedAmt = `AED ${Number(payload.investment_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+          $headerRow.find('.investment-amount-display').text(formattedAmt);
+          $headerRow.find('.payment-method-display').text(payload.payment_method || '—');
+
+          // reset baseline + remove icon
+          $detailRow.data('snapshot', buildInvestmentSnapshot($detailRow));
+          toggleUpdateButtonForInvestment($detailRow);
+
+          fetchAndUpdateInvestmentTotal();
+          const $cell = $headerRow.find('td:last').addClass('bg-green-50');
+          setTimeout(() => $cell.removeClass('bg-green-50'), 600);
+        })
+        .fail(function (xhr) {
+          alert(xhr?.responseJSON?.message || 'Update failed.');
+          console.error(xhr?.responseText || xhr);
+        });
+    });
+
+  $(document)
+    .off('input.investDirty change.investDirty')
+    .on('input.investDirty change.investDirty', '#investmentTableBody .investment-detail-row :input', function () {
+      toggleUpdateButtonForInvestment($(this).closest('.investment-detail-row'));
+    });
+
 }
 
 function renderPreview(previewSelector, fileUrl) {
@@ -1933,19 +2156,17 @@ function createInvestmentLayout(
     });
 
   const actionButtons = `
-      <div class="flex gap-1">
-        ${status === "draft" ? `
-          <button type="button" class="submit-investment-btn px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700">
-            Submit
-          </button>` : ''}
+    <div class="action-buttons flex items-center justify-center gap-1">
+      ${status === "draft" ? `
+        <button type="button" class="submit-investment-btn px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700">
+          Submit
+        </button>` : ''}
 
-        ${createIconButton('investment-attachment-btn', 'bi-cloud-arrow-up-fill', 'Upload Attachments', 'bg-blue-500 hover:bg-blue-600 text-white', investmentId)}
-
-        ${createIconButton('btn-view-attachment', 'bi bi-paperclip', 'View Attachments', 'bg-gray-700 hover:bg-gray-800 text-white', investmentId)}
-
-        ${createIconButton('delete-investment-btn', 'bi-trash-fill', 'Delete Row', 'bg-red-500 hover:bg-red-600 text-white', investmentId)}
-      </div>
-    `;
+      ${createInvestmentIconButton('investment-attachment-btn', 'bi-cloud-arrow-up-fill', 'Upload Attachments', 'bg-blue-500 hover:bg-blue-600 text-white', investmentId)}
+      ${createInvestmentIconButton('btn-view-attachment', 'bi bi-paperclip', 'View Attachments', 'bg-gray-700 hover:bg-gray-800 text-white', investmentId)}
+      ${createInvestmentIconButton('delete-investment-btn', 'bi-trash-fill', 'Delete Row', 'bg-red-500 hover:bg-red-600 text-white', investmentId)}
+    </div>
+  `;
 
   const safeId = String(investmentId).replace(/[^a-zA-Z0-9_-]/g, '');
 
@@ -1961,7 +2182,7 @@ function createInvestmentLayout(
         </td>
         <td class="border p-2"><span class="payment-method-display">${escapeHtml(safePayment)}</span></td>
         <td class="border p-2 text-center">
-          <div class="flex flex-col items-center gap-1">
+          <div class="action-buttons flex items-center justify-center gap-1">
             ${actionButtons}
           </div>
         </td>
@@ -2076,6 +2297,9 @@ function createInvestmentLayout(
 
   $("#investmentTableBody").append($headerRow).append($detailRow);
 
+  $detailRow.data('snapshot', buildInvestmentSnapshot($detailRow));
+  toggleUpdateButtonForInvestment($detailRow);
+
   const $form = $detailRow.find(`#investmentDetailsForm-${investmentId}`);
 
   // Define a clean function to sanitize input values
@@ -2120,11 +2344,16 @@ function createInvestmentLayout(
   fetchAndUpdateInvestmentTotal();
 }
 
-function createIconButton(btnClass, iconClass, tooltipText, bgClasses, id) {
+// Investment-only icon factory (doesn't clash with Materials)
+function createInvestmentIconButton(btnClass, iconClass, tooltipText, bgClasses, id) {
   return `
     <div class="relative group inline-block investment-action-buttons">
-      <button class="${btnClass} ${bgClasses} px-2 py-1 rounded text-sm" data-id="${id}">
-        <i class="bi ${iconClass}"></i>
+      <button
+        class="${btnClass} ${bgClasses} h-8 w-8 p-0 rounded text-sm flex items-center justify-center"
+        data-id="${id}"
+        type="button"
+      >
+        <i class="bi ${iconClass} text-[16px] leading-none"></i>
       </button>
       <div class="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-1
                   scale-0 group-hover:scale-100 transition duration-200
@@ -2169,18 +2398,12 @@ function loadGtsInvestments() {
           item.murabaha_date,
           item.payment_method
         );
-
-        // On last row render, delay total update
-        if (index === data.length - 1) {
-          setTimeout(() => {
-            if ($("#materialLayout").is(":visible")) {
-              fetchAndUpdateInvestmentTotal();
-            }
-          }, 200); // Delay ensures rows are in DOM
-        }
       });
 
       updateInvestmentSerialNumbers();
+
+      // Always refresh the card once rows are in the DOM
+      fetchAndUpdateInvestmentTotal();
     },
     error: function () {
       alert("Failed to load investments");
@@ -2195,21 +2418,134 @@ function updateInvestmentSerialNumbers() {
 }
 
 function fetchAndUpdateInvestmentTotal() {
-  $.ajax({
-    url: "/gts-investments/total",
-    method: "GET",
-    success: function (response) {
-      const total = parseFloat(response.total) || 0;
-      const formatted = `AED ${total.toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      })}`;
+  const url = (typeof window.investmentUrl === 'function')
+    ? window.investmentUrl('gts-investments/total')   // live (prefixed)
+    : '/gts-investments/total';                       // local
 
-      $("#totalInvestmentAmount-investment").text(formatted);
-      $("#totalInvestmentAmount-material").text(formatted);
-    },
-    error: function (xhr) {
-      console.error("Failed to fetch investment total:", xhr.responseText);
+  return $.getJSON(url)
+    .then(res => {
+      const total = Number(res?.total ?? 0) || 0;
+      applyInvestmentTotal(total);
+      return total;
+    })
+    .catch(err => {
+      console.error('investment total fetch failed', err);
+      applyInvestmentTotal(0);
+      return 0;
+    });
+}
+
+// Write everywhere + broadcast
+function applyInvestmentTotal(total) {
+  const formatted = 'AED ' + (Number(total) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  $('#investmentTotalAmount').text(formatted);              // investment tab card (if present)
+  $('#totalInvestmentAmount-investment').text(formatted);   // Summary card
+  $('#totalInvestmentAmount-material').text(formatted);     // any legacy alias
+
+  // cache for summary renderer
+  window.sheetTotals = window.sheetTotals || {};
+  window.sheetTotals.investment = Number(total) || 0;
+
+  // Tell Summary (if it listens)
+  $(document).trigger('gts:totalsUpdated', [{
+    material: Number(window.sheetTotals.material) || 0,
+    shipping: Number(window.sheetTotals.shipping) || 0,
+    investment: Number(total) || 0,
+  }]);
+}
+
+// Write to every place that might display the investment sum + broadcast
+function applyInvestmentTotal(total) {
+  const formatted = `AED ${Number(total || 0).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })}`;
+
+  // Investment sheet (new unique ID)
+  $("#investmentTotalAmount").text(formatted);
+
+  // Legacy IDs used elsewhere (Summary / Materials cards that show investment)
+  $("#totalInvestmentAmount-investment").text(formatted);
+  $("#totalInvestmentAmount-material").text(formatted);
+
+  // cache + broadcast
+  window.sheetTotals = window.sheetTotals || {};
+  window.sheetTotals.investment = Number(total) || 0;
+
+  // If you persist others, keep them; otherwise default to 0
+  const payload = {
+    material: Number(window.sheetTotals.material) || 0,
+    shipping: Number(window.sheetTotals.shipping) || 0,
+    investment: Number(total) || 0
+  };
+
+  // Use the same event your Summary listener expects
+  $(document).trigger('gts:totalsUpdated', [payload]);
+}
+
+// Build a snapshot of a detail row (for change detection)
+function buildInvestmentSnapshot($detailRow) {
+  const $f = $detailRow.find('form');
+  const t = v => (v == null ? '' : String(v).trim());
+  const n = v => (Number(String(v).replace(/[^\d.-]/g, '')) || 0);
+
+  return {
+    date: t($f.find('.investment-date').val()),
+    investor: t($f.find('.investment-investor').val()),
+    // NOTE: keep raw text so removing ".00" counts as a change
+    amount_raw: t($f.find('.investment-amount').val()),
+    inv_no: t($f.find('.investment-no').val()),
+    mot: t($f.find('.mode-of-transaction').val()),
+    murabaha: t($f.find('.murabaha-input').val()),
+    repay_terms: t($f.find('.repayment-terms').val()),
+    tenure: t($f.find('.loan-tenure').val()), // keep as text for strict diff
+    repay_date: t($f.find('.repayment-date').val()),
+    remarks: t($f.find('.remarks').val()),
+    payment: t($f.find('.payment-method').val()),
+    murabaha_status: $detailRow.find('input.murabaha-radio:checked').val() || 'no',
+    murabaha_date: t($detailRow.find('.murabaha-date-hidden').val() || '')
+  };
+}
+
+function isInvestmentChanged($detailRow) {
+  const prev = $detailRow.data('snapshot') || {};
+  const curr = buildInvestmentSnapshot($detailRow);
+  try { return JSON.stringify(prev) !== JSON.stringify(curr); }
+  catch { return true; }
+}
+
+// Ensure/update the update icon in the Action cell for this row
+function toggleUpdateButtonForInvestment($detailRow) {
+  const $headerRow = $detailRow.prev('.investment-header');
+  const $cell = $headerRow.find('td:last');
+
+  // Single wrapper in Action cell
+  let $wrap = $cell.find('.action-buttons');
+  if (!$wrap.length) {
+    $wrap = $('<div class="action-buttons flex items-center justify-center gap-1"></div>');
+    $wrap.append($cell.children().detach());
+    $cell.empty().append($wrap);
+  }
+
+  const changed = isInvestmentChanged($detailRow);
+  const $existing = $wrap.find('.update-invest-btn');
+
+  if (changed) {
+    if ($existing.length === 0) {
+      $wrap.prepend(
+        createInvestmentIconButton(
+          'update-invest-btn',
+          'bi-arrow-repeat',
+          'Update Row',
+          'bg-green-600 hover:bg-green-700 text-white',
+          $headerRow.data('id') || ''
+        )
+      );
+    } else if ($existing.length > 1) {
+      // if somehow duplicated, keep the first and remove the rest
+      $existing.slice(1).remove();
     }
-  });
+  } else {
+    $existing.remove();
+  }
 }

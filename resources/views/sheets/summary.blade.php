@@ -1,4 +1,5 @@
-<div class="max-w-7xl mx-auto px-4 py-6">
+<div id="summary-root"
+    data-totals-url="{{ route('gts.totals', ['only_posted' => 1]) }}" class="max-w-7xl mx-auto px-4 py-6">
     <!-- Header -->
     <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-6">
         <h2 class="text-2xl font-bold tracking-tight">Summary Overview</h2>
@@ -65,89 +66,76 @@
         <canvas id="summaryChart" class="w-full h-full"></canvas>
     </div>
 
-    <!-- SPLIT: LEFT (Cash Out) | RIGHT (Cash In Breakdown) -->
-    <div class="grid grid-cols-1 md:grid-cols-12 gap-6">
-        <!-- LEFT: Cash In Breakdown -->
-        <div class="md:col-span-6 space-y-4">
-            <div class="flex items-baseline justify-between">
-                <h2 class="text-xl font-semibold">Cash In Breakdown</h2>
-                <span class="text-sm text-gray-500">Live from sheet totals</span>
-            </div>
-
-            <!-- Grand Total -->
-            <!-- <div class="bg-white rounded-2xl shadow p-5 border-l-4 border-blue-700 flex items-center justify-between">
-                <div class="text-gray-500 font-medium text-sm">Grand Total (Cash In)</div>
-                <div id="cashInGrandTotal" class="text-2xl font-bold text-blue-700">AED 0.00</div>
-            </div> -->
-
-            <!-- Row-wise list -->
-            <div id="cashInBreakdownGrid" class="space-y-3"></div>
-
-            <!-- Customer Sheets Breakdown (table) -->
-            <div class="bg-white rounded-2xl shadow-sm border border-gray-100">
-                <div class="px-5 py-3 border-b">
-                    <h3 class="text-lg font-semibold text-green-700 text-center">Customer Sheets Breakdown</h3>
+    <!-- Cash Out Summary -->
+    <div class="space-y-4 mb-6">
+        <h2 class="text-xl font-semibold">Cash Out Summary</h2>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div class="rounded-xl border border-gray-100 p-4 text-center">
+                    <div class="text-xs uppercase tracking-wider text-gray-500 mb-1">Total Purchase of Material</div>
+                    <div id="totalPurchaseMaterial" class="text-xl font-bold text-gray-900">Loading…</div>
                 </div>
-
-                <div class="overflow-x-auto">
-                    <table class="w-full text-sm">
-                        <thead class="bg-gray-50 text-gray-700">
-                            <tr>
-                                <th class="text-left font-semibold px-4 py-3">Sheet</th>
-                                <th class="text-right font-semibold px-4 py-3">Total Material (AED)</th>
-                                <th class="text-right font-semibold px-4 py-3">Total Shipping Cost (AED)</th>
-                                <th class="text-right font-semibold px-4 py-3">Total (AED)</th>
-                            </tr>
-                        </thead>
-                        <tbody id="customerSheetsTableBody" class="divide-y divide-gray-100"></tbody>
-                        <tfoot>
-                            <tr class="bg-green-50">
-                                <td class="px-4 py-3 text-right font-semibold" colspan="3">Grand Total:</td>
-                                <td id="customerSheetsTableGrand" class="px-4 py-3 text-right font-extrabold text-green-700">AED 0.00</td>
-                            </tr>
-                        </tfoot>
-                    </table>
+                <div class="rounded-xl border border-gray-100 p-4 text-center">
+                    <div class="text-xs uppercase tracking-wider text-gray-500 mb-1">Total Shipping Cost</div>
+                    <div id="totalShippingCost" class="text-xl font-bold text-gray-900">Loading…</div>
+                </div>
+                <!-- Total Investment Amount -->
+                <div class="rounded-xl border border-gray-100 p-4 text-center">
+                    <div class="text-xs uppercase tracking-wider text-gray-500 mb-1">Total Investment Amount</div>
+                    <div id="totalInvestmentAmount-investment" class="text-xl font-bold text-gray-900">Loading…</div>
                 </div>
             </div>
         </div>
-
-        <!-- RIGHT: Cash Out Summary -->
-        <div class="md:col-span-6 space-y-4">
-            <h2 class="text-xl font-semibold">Cash Out Summary</h2>
-            <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div class="rounded-xl border border-gray-100 p-4 text-center">
-                        <div class="text-xs uppercase tracking-wider text-gray-500 mb-1">Total Purchase of Material</div>
-                        <div id="totalPurchaseMaterial" class="text-xl font-bold text-gray-900">Loading…</div>
-                    </div>
-                    <div class="rounded-xl border border-gray-100 p-4 text-center">
-                        <div class="text-xs uppercase tracking-wider text-gray-500 mb-1">Total Shipping Cost</div>
-                        <div id="totalShippingCost" class="text-xl font-bold text-gray-900">Loading…</div>
-                    </div>
-                </div>
+    </div>
+    <!-- Cash In Breakdown -->
+    <div class="space-y-4 mb-6">
+        <div class="flex items-baseline justify-between">
+            <h2 class="text-xl font-semibold">Cash In Breakdown</h2>
+            <span class="text-sm text-gray-500">Live from sheet totals</span>
+        </div>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100">
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-gray-50 text-gray-700">
+                        <tr>
+                            <th class="text-left font-semibold px-4 py-3">Sheet</th>
+                            <th class="text-right font-semibold px-4 py-3">Total Material (AED)</th>
+                            <th class="text-right font-semibold px-4 py-3">Total Shipping Cost (AED)</th>
+                            <th class="text-right font-semibold px-4 py-3">Total (AED)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cashInTableBody" class="divide-y divide-gray-100"></tbody>
+                    <tfoot>
+                        <tr class="bg-green-50">
+                            <td class="px-4 py-3 text-right font-semibold" colspan="3">Grand Total:</td>
+                            <td id="cashInTableGrand" class="px-4 py-3 text-right font-extrabold text-green-700">AED 0.00</td>
+                        </tr>
+                    </tfoot>
+                </table>
             </div>
-            <!-- Loan Ledger – Outstanding (only if > 0) -->
-            <div id="loanOutstandingSection" class="space-y-3">
-                <h2 class="text-xl font-semibold">Loan Ledger – Outstanding Balances</h2>
-                <div class="bg-white rounded-2xl shadow-sm border border-gray-100">
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-sm">
-                            <thead class="bg-gray-50 text-gray-700">
-                                <tr>
-                                    <th class="text-left font-semibold px-4 py-3">Customer Sheet</th>
-                                    <th class="text-right font-semibold px-4 py-3">Remaining Balance (AED)</th>
-                                </tr>
-                            </thead>
-                            <tbody id="loanOutstandingBody" class="divide-y divide-gray-100"></tbody>
-                            <tfoot>
-                                <tr class="bg-blue-50">
-                                    <td class="px-4 py-3 text-right font-semibold">Grand Total:</td>
-                                    <td id="loanOutstandingGrand" class="px-4 py-3 text-right font-extrabold text-blue-700">AED 0.00</td>
-                                </tr>
-                            </tfoot>
-                        </table>
-                    </div>
-                </div>
+        </div>
+    </div>
+
+    <!-- Loan Ledger – Outstanding Balances -->
+    <div id="loanOutstandingSection" class="space-y-4">
+        <h2 class="text-xl font-semibold">Loan Ledger – Outstanding Balances</h2>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100">
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-gray-50 text-gray-700">
+                        <tr>
+                            <th class="text-left font-semibold px-4 py-3">Customer Sheet</th>
+                            <th class="text-right font-semibold px-4 py-3">Remaining Balance (AED)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="loanOutstandingBody" class="divide-y divide-gray-100"></tbody>
+                    <tfoot>
+                        <tr class="bg-blue-50">
+                            <td class="px-4 py-3 text-right font-semibold">Grand Total:</td>
+                            <td id="loanOutstandingGrand" class="px-4 py-3 text-right font-extrabold text-blue-700">AED 0.00</td>
+                        </tr>
+                    </tfoot>
+                </table>
             </div>
         </div>
     </div>

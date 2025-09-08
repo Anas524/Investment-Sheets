@@ -2,7 +2,7 @@
   <!-- <h2 class="text-2xl font-bold mb-4">Material Sheet</h2> -->
 
   <!-- Totals Section -->
-  <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
 
     <!-- Total Material -->
     <div class="bg-white rounded-2xl shadow-lg p-6 text-center border-l-4 border-blue-700">
@@ -197,12 +197,6 @@
       </div>
     </div>
   </div>
-
-
-  <button id="saveTooltipBtn" class="tooltip-save-button hidden absolute z-50 bg-green-600 text-white font-medium px-4 py-1.5 rounded-md shadow-md text-sm items-center gap-2">
-    Save Changes
-  </button>
-
 </div>
 
 <!-- GTS Material Attachment Modal -->
@@ -232,7 +226,7 @@
             <span class="text-sm font-semibold text-blue-600">Browse</span>
           </div>
         </label>
-        <span id="gtsAttachInvoiceStatus" class="text-green-600 text-xs hidden flex items-center gap-1">
+        <span id="gtsAttachInvoiceStatus" class="text-green-600 text-xs hidden items-center gap-1">
           <i class="bi bi-check-circle-fill text-green-600"></i> Uploaded
         </span>
       </div>
@@ -248,7 +242,7 @@
             <span class="text-sm font-semibold text-blue-600">Browse</span>
           </div>
         </label>
-        <span id="gtsAttachReceiptStatus" class="text-green-600 text-xs hidden flex items-center gap-1">
+        <span id="gtsAttachReceiptStatus" class="text-green-600 text-xs hidden items-center gap-1">
           <i class="bi bi-check-circle-fill text-green-600"></i> Uploaded
         </span>
       </div>
@@ -264,7 +258,7 @@
             <span class="text-sm font-semibold text-blue-600">Browse</span>
           </div>
         </label>
-        <span id="gtsAttachNoteStatus" class="text-green-600 text-xs hidden flex items-center gap-1">
+        <span id="gtsAttachNoteStatus" class="text-green-600 text-xs hidden items-center gap-1">
           <i class="bi bi-check-circle-fill text-green-600"></i> Uploaded
         </span>
       </div>

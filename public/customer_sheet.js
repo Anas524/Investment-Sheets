@@ -84,7 +84,7 @@ $(document).ready(function () {
                     <div class="flex items-start gap-2"><span class="font-semibold w-56">Total No. of Units:</span> <div class="flex-1 text-gray-700 total-units">0</div></div>
                     <div class="flex items-start gap-2"><span class="font-semibold w-56">DGD:</span> <div class="flex-1 text-gray-700 dgd-value">AED</div></div>
                     <div class="flex items-start gap-2"><span class="font-semibold w-56">Labour Charges:</span> <div class="flex-1 text-gray-700 labour-value">AED</div></div>
-                    <div class="flex items-start gap-2"><span class="font-semibold w-56">Shipping Cost:</span> <div class="flex-1 text-gray-700 shipping-cost-value">0</div></div>
+                    <div class="flex items-start gap-2"><span class="font-semibold w-56">Shipping Cost:</span> <div class="flex-1 text-gray-700 shipping-cost-value">AED 0.00</div></div>
                 </div>
 
                 <!-- Right Editable Section -->
@@ -374,127 +374,125 @@ $(document).ready(function () {
             console.warn('Blocked legacy form submit to /update-customer-sheet');
         });
 
-    $(document).on('click', '.save-changes-btn', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
+    $(document).off('click.saveUpdate')
+        .on('click.saveUpdate', '.save-changes-btn', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (isRendering) return;
 
-        if (isRendering) return; // do not run while rendering
+            const $saveBtn = $(this);
+            const $headerRow = $saveBtn.closest('.customer-header-row');
+            const rowId = $headerRow.data('id');             // "customer-<id>"
+            const entryId = Number($headerRow.data('entry-id'));
+            const sheetId = Number($headerRow.data('sheet-id') || $('#customer-sheet-id').val());
+            const dateRaw = String($headerRow.data('date') || '');
+            const supplier = String($headerRow.data('supplier') || '');
+            const descRaw = String($headerRow.data('description') || '');
 
-        const $headerRow = $(this).closest('.customer-header-row');
-        const rowId = $headerRow.data('id');             // "customer-<id>"
-        const entryId = Number($headerRow.data('entry-id'));
-        const sheetId = Number($headerRow.data('sheet-id') || $('#customer-sheet-id').val());
-        const dateRaw = String($headerRow.data('date') || '');
-        const supplier = String($headerRow.data('supplier') || '');
-        const descRaw = String($headerRow.data('description') || '');
+            // make the button visible & busy (prevents double clicks)
+            $saveBtn.removeClass('hidden').addClass('opacity-60 pointer-events-none');
 
-        if (!entryId || !sheetId || !dateRaw || !supplier) {
-            console.error('❌ Missing:', { entryId, sheetId, dateRaw, supplier, headerData: $headerRow.data() });
-            alert('Missing required fields (id/sheet_id/date/supplier). Open console.');
-            return;
-        }
+            if (!entryId || !sheetId || !dateRaw || !supplier) {
+                console.error('❌ Missing:', { entryId, sheetId, dateRaw, supplier, headerData: $headerRow.data() });
+                alert('Missing required fields (id/sheet_id/date/supplier). Open console.');
+                $saveBtn.removeClass('opacity-60 pointer-events-none');
+                return;
+            }
 
-        const $detailRow = $(`.detail-row[data-id="${rowId}"]`);
+            const $detailRow = $(`.detail-row[data-id="${rowId}"]`);
+            const getN = s => parseFloat((s || '').toString().replace(/[^\d.-]/g, '')) || 0;
 
-        // Read Summary Right inputs
-        const mode_of_transaction = ($detailRow.find('[name="mode_of_transaction"]').val() || '').trim();
-        const receipt_no = ($detailRow.find('[name="receipt_no"]').val() || '').trim();
-        const remarks = ($detailRow.find('[name="remarks"]').val() || '').trim();
-
-        // Read totals from DOM
-        const n = s => parseFloat((s || '').toString().replace(/[^\d.-]/g, '')) || 0;
-
-        // Collect item rows
-        const items = [];
-        $detailRow.find('tr.item-row').each(function () {
-            const $r = $(this);
-            items.push({
-                description: $r.find('[data-field="description"]').val() || '',
-                units: n($r.find('[data-field="units"]').val()),
-                unit_price: n($r.find('[data-field="unitPrice"]').val()),
-                vat: n($r.find('[data-field="vat"]').val()),
-                ctns: n($r.find('[data-field="ctns"]').val()),
-                weight_per_ctn: n($r.find('[data-field="weightPerCtn"]').val()),
-                total_weight: n($r.find('.total-weight').text()),
+            // ---- collect inputs (your existing logic) ----
+            const items = [];
+            $detailRow.find('tr.item-row').each(function () {
+                const $r = $(this);
+                items.push({
+                    description: $r.find('[data-field="description"]').val() || '',
+                    units: getN($r.find('[data-field="units"]').val()),
+                    unit_price: getN($r.find('[data-field="unitPrice"]').val()),
+                    vat: getN($r.find('[data-field="vat"]').val()),
+                    ctns: getN($r.find('[data-field="ctns"]').val()),
+                    weight_per_ctn: getN($r.find('[data-field="weightPerCtn"]').val()),
+                    total_weight: getN($r.find('.total-weight').text()),
+                });
             });
-        });
 
-        // Derive sums from items (source of truth)
-        const sumUnits = items.reduce((t, i) => t + (i.units || 0), 0);
-        const sumWeight = items.reduce((t, i) => t + (i.total_weight || 0), 0);
+            const sumUnits = items.reduce((t, i) => t + (i.units || 0), 0);
+            const sumWeight = items.reduce((t, i) => t + (i.total_weight || 0), 0);
+            const tmNoVAT = getN($detailRow.find('.total-material-without-vat').text());
+            const tmBuy = getN($detailRow.find('.total-material-buy').text());
+            const tVAT = getN($detailRow.find('.total-vat').text());
+            const dgd = getN($detailRow.find('.dgd-input').val());
+            const labour = getN($detailRow.find('.labour-input').val());
+            const shipRate = getN($detailRow.find('.shipping-input').val());
+            const shipTotal = dgd + labour + shipRate;
 
-        const total_material_without_vat = n($detailRow.find('.total-material-without-vat').text());
-        const total_material_buy = n($detailRow.find('.total-material-buy').text());
-        const total_vat = n($detailRow.find('.total-vat').text());
-        const dgd = n($detailRow.find('.dgd-input').val());
-        const labour = n($detailRow.find('.labour-input').val());
-        const shipping_cost = n($detailRow.find('.shipping-input').val());
+            $detailRow.find('.total-units').text(sumUnits.toFixed(2));
+            $detailRow.find('.total-weight-kg').text(sumWeight.toFixed(2));
+            $detailRow.find('.total-shipping-cost').text(shipTotal.toFixed(2));
 
-        console.log('total_material_without_vat →', total_material_without_vat);
+            const payload = {
+                id: entryId,
+                sheet_id: sheetId,
+                date: dateRaw,
+                supplier,
+                description: descRaw,
+                total_material_without_vat: tmNoVAT,
+                total_material_buy: tmBuy,
+                total_vat: tVAT,
+                shipping_cost: shipRate,
+                dgd, labour,
+                total_shipping_cost: shipTotal,
+                total_weight: sumWeight,
+                total_units: sumUnits,
+                mode_of_transaction: ($detailRow.find('[name="mode_of_transaction"]').val() || '').trim(),
+                receipt_no: ($detailRow.find('[name="receipt_no"]').val() || '').trim(),
+                remarks: ($detailRow.find('[name="remarks"]').val() || '').trim(),
+                items
+            };
 
-        // Compute shipping total; prefer computed over DOM fallback
-        const totalShippingCost = dgd + labour + shipping_cost;
+            const UPDATE_URL =
+                document.getElementById('customer-sheet-root')?.dataset.updateUrl ||
+                (window.routes && typeof window.routes.updateCustomerEntry === 'string' && window.routes.updateCustomerEntry.length
+                    ? window.routes.updateCustomerEntry
+                    : (typeof investmentUrl === 'function'
+                        ? investmentUrl('customer-sheet/entry/update')
+                        : '/customer-sheet/entry/update'));
 
-        // Also push the computed values back to the UI so it’s consistent
-        $detailRow.find('.total-units').text(sumUnits.toFixed(2));
-        $detailRow.find('.total-weight-kg').text(sumWeight.toFixed(2));
-        $detailRow.find('.total-shipping-cost').text(totalShippingCost.toFixed(2)); // text only; see B for AED label
+            if (!UPDATE_URL || UPDATE_URL === '/') {
+                console.error('Bad UPDATE_URL:', UPDATE_URL);
+                alert('Update URL is not set. Refresh the page and try again.');
+                $saveBtn.removeClass('opacity-60 pointer-events-none');
+                return;
+            }
 
-        const payload = {
-            id: entryId,
-            sheet_id: sheetId,
-            date: dateRaw,
-            supplier,
-            description: descRaw,
-
-            total_material_without_vat,
-            total_material_buy,
-            total_vat,
-            shipping_cost,
-            dgd,
-            labour,
-            total_shipping_cost: totalShippingCost,
-            total_weight: sumWeight,
-            total_units: sumUnits,
-
-            mode_of_transaction,
-            receipt_no,
-            remarks,
-
-            items
-        };
-
-        // Compute a robust URL, then POST
-        const UPDATE_URL =
-            document.getElementById('customer-sheet-root')?.dataset.updateUrl ||
-            (window.routes && typeof window.routes.updateCustomerEntry === 'string' && window.routes.updateCustomerEntry.length
-                ? window.routes.updateCustomerEntry
-                : (typeof investmentUrl === 'function'
-                    ? investmentUrl('customer-sheet/entry/update')
-                    : '/customer-sheet/entry/update'));
-
-        if (!UPDATE_URL || UPDATE_URL === '/') {
-            console.error('Bad UPDATE_URL:', UPDATE_URL);
-            alert('Update URL is not set. Refresh the page and try again.');
-            return;
-        }
-
-        $.ajax({
-            type: 'POST',
-            url: UPDATE_URL,
-            data: payload,
-            headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
-        })
-            .done(() => {
-                $detailRow.find('input, textarea').each(function () { $(this).data('orig', $(this).val() || ''); });
-                $headerRow.find('.save-changes-btn').addClass('hidden');
-                loadCustomerSheetData($('#customer-sheet-id').val());
+            $.ajax({
+                type: 'POST',
+                url: UPDATE_URL,
+                data: payload,
+                headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
             })
-            .fail(err => {
-                console.error('Update failed:', err.responseJSON || err);
-                alert('Update failed. See console for details.');
-            });
-    });
+                .done(() => {
+                    // mark row clean
+                    $detailRow.find('input, textarea').each(function () { $(this).data('orig', $(this).val() || ''); });
+
+                    // reflect numbers to header immediately
+                    $headerRow.find('.header-total-material').text(aed(tmBuy));
+                    $headerRow.find('.header-total-shipping').text(aed(shipTotal));
+
+                    // update this sheet’s cards
+                    if (typeof recalcSheetCards === 'function') recalcSheetCards(sheetId);
+
+                    // finally hide + re-enable button (for next time)
+                    $saveBtn.addClass('hidden').removeClass('opacity-60 pointer-events-none');
+                })
+                .fail(err => {
+                    console.error('Update failed:', err.responseJSON || err);
+                    alert('Update failed. See console for details.');
+                    // allow retry
+                    $saveBtn.removeClass('opacity-60 pointer-events-none');
+                });
+        });
 
     // ------- Modal open/close -------
     $(document).on('click', '.open-loan-modal-btn', function () {
@@ -712,9 +710,7 @@ $(document).ready(function () {
                     + n($detail.find('.shipping-input').val());
                 $detail.find('.total-shipping-cost').text(total.toFixed(2));
 
-                // show/hide Save depending on real dirtiness
-                const dirty = isRowDirty($detail);
-                $header.find('.save-changes-btn').toggleClass('hidden', !dirty);
+                setSaveState($header, isRowDirty($detail));
             });
 
     // (optional) If remarks / receipt / mode change should also trigger Save:
@@ -726,7 +722,9 @@ $(document).ready(function () {
             function () {
                 const $detail = $(this).closest('.detail-row');
                 const rowId = $detail.data('id');
-                $(`.customer-header-row[data-id="${rowId}"] .save-changes-btn`).removeClass('hidden');
+                const $header = $(`.customer-header-row[data-id="${rowId}"]`);
+                const dirty = isRowDirty($detail);     // <-- define it
+                setSaveState($header, dirty);
             });
 
     // Open the hidden file input
@@ -909,7 +907,9 @@ function bindLiveCalculation($detailRow, $headerRow) {
         $headerRow.find('.header-total-material').text(aed(totalMaterialBuy));
         $headerRow.find('.header-total-shipping').text(aed(totalShippingCost));
 
-        if (typeof updateOverallTotals === 'function') updateOverallTotals();
+        const sid = Number($headerRow.data('sheet-id') || $detailRow.data('sheet-id'));
+        if (sid && typeof recalcSheetCards === 'function') recalcSheetCards(sid);
+        if (typeof isRowDirty === 'function') setSaveState($headerRow, isRowDirty($detailRow));
     });
 }
 
@@ -1134,9 +1134,9 @@ function renderCustomerSheetRows(sheetId, entries) {
         const actionCell = `
         <td class="border p-2">
             <div class="flex items-center justify-center gap-2">
-            <button class="save-changes-btn hidden text-green-600 hover:text-green-800"
+            <button class="save-changes-btn hidden w-8 h-8 rounded bg-green-600 hover:bg-green-700 text-white"
                     data-id="${entry.id}" title="Save">
-                <i class="bi bi-check2-circle text-lg"></i>
+                <i class="bi bi-arrow-repeat text-lg"></i>
             </button>
 
             <!-- Upload -->
@@ -1171,7 +1171,11 @@ function renderCustomerSheetRows(sheetId, entries) {
                 <td class="border p-2">${entry.supplier || ''}</td>
                 <td class="border p-2">${entry.description || ''}</td>
                 <td class="border p-2 header-total-material">${aed(entry.total_material_buy)}</td>
-                <td class="border p-2 header-total-shipping">${aed(entry.total_shipping_cost)}</td>
+                <td class="border p-2 header-total-shipping">${aed(
+                        num(entry.total_shipping_cost) ||
+                        (num(entry.shipping_cost) + num(entry.dgd) + num(entry.labour))
+                    )
+                }</td>
                 ${actionCell}
             </tr>
         `);
@@ -1189,7 +1193,7 @@ function renderCustomerSheetRows(sheetId, entries) {
                                 <div class="flex items-start gap-2"><span class="font-semibold w-56">Total No. of Units:</span><div class="flex-1 text-gray-700 total-units">${fmt0(entry.total_units || 0)}</div></div>
                                 <div class="flex items-start gap-2"><span class="font-semibold w-56">DGD:</span><div class="flex-1 text-gray-700 dgd-value">${aed(entry.dgd || 0)}</div></div>
                                 <div class="flex items-start gap-2"><span class="font-semibold w-56">Labour Charges:</span><div class="flex-1 text-gray-700 labour-value">${aed(entry.labour || 0)}</div></div>
-                                <div class="flex items-start gap-2"><span class="font-semibold w-56">Shipping Cost:</span><div class="flex-1 text-gray-700 shipping-cost-value">${aed(entry.total_shipping_cost || 0)}</div></div>
+                                <div class="flex items-start gap-2"><span class="font-semibold w-56">Shipping Cost:</span><div class="flex-1 text-gray-700 shipping-cost-value">${aed(num(entry.shipping_cost || 0))}</div></div>
                             </div>
                             <!-- Summary Right -->
                             <div class="space-y-2 border-4 border-zinc-500 p-5 bg-white">
@@ -1357,44 +1361,59 @@ function initAlwaysEditable($detailRow, $headerRow) {
     const $saveBtn = $headerRow.find('.save-changes-btn');
 
     // On any input change, update totals and toggle Save button based on dirty state
-    $detailRow.on('input change', 'input, textarea', function () {
-        const dirty = isRowDirty($detailRow);
-        if (dirty) $saveBtn.removeClass('hidden');
-        else $saveBtn.addClass('hidden');
-    });
+    $detailRow
+        .off('input.custDirty change.custDirty blur.custDirty', 'input, textarea')
+        .on('input.custDirty change.custDirty blur.custDirty', 'input, textarea', function () {
+            setSaveState($headerRow, isRowDirty($detailRow));
+        });
 
     // Initial state (should be clean)
-    $saveBtn.addClass('hidden');
+    setSaveState($headerRow, false); // hidden + disabled
 }
 
 // Compare current values vs originals
 function isRowDirty($detailRow) {
     let dirty = false;
-    const n = v => parseFloat(String(v).replace(/[^\d.-]/g, '')) || 0;
-    const numEq = (a, b) => Math.abs(n(a) - n(b)) < 1e-6;
+    const n = v => Number(String(v ?? '').replace(/[^\d.-]/g, '')) || 0;
+    const numEq = (a, b) => Math.abs(n(a) - n(b)) < 0.005; // ~0.5 fils
 
-    // Summary-right inputs/textarea
-    $detailRow.find('input[name="mode_of_transaction"], [name="receipt_no"], textarea[name="remarks"]')
-        .each(function () {
-            const cur = (($(this).val() || '') + '').trim();
-            const orig = (($(this).data('orig') || '') + '').trim();
-            if (cur !== orig) { dirty = true; return false; }
-        });
-    if (dirty) return true;
-
-    // Item inputs
-    $detailRow.find('tr.item-row input[data-field]').each(function () {
-        const cur = (($(this).val() || '') + '').trim();
-        const orig = (($(this).data('orig') || '') + '').trim();
+    // 1) Meta fields (text)
+    $detailRow.find('input[name="mode_of_transaction"], [name="receipt_no"], textarea[name="remarks"]').each(function () {
+        const cur = String($(this).val() ?? '').trim();
+        const orig = String($(this).data('orig') ?? '').trim();
         if (cur !== orig) { dirty = true; return false; }
     });
     if (dirty) return true;
 
-    // numeric compare for cost inputs
+    // 2) Item inputs (numeric-aware + format-aware)
+    $detailRow.find('tr.item-row input[data-field]').each(function () {
+        const curRaw = String($(this).val() ?? '').trim();
+        const origRaw = String($(this).data('orig') ?? '').trim();
+
+        const looksNumeric = $(this).is('[type="number"]') || /^[\d\.,\-]+$/.test(curRaw + origRaw);
+
+        if (looksNumeric) {
+            const sameNumber = numEq(curRaw, origRaw);
+            const sameString = curRaw === origRaw;
+
+            // mark dirty if number changed OR (number same but formatting changed)
+            if (!sameNumber || !sameString) { dirty = true; return false; }
+        } else {
+            if (curRaw !== origRaw) { dirty = true; return false; }
+        }
+    });
+    if (dirty) return true;
+
+    // 3) Cost inputs (numeric + format-aware)
     $detailRow.find('.dgd-input, .labour-input, .shipping-input').each(function () {
-        const orig = $(this).data('orig');
-        if (orig === undefined) $(this).data('orig', $(this).val() || '0'); // lazy-seed
-        if (!numEq($(this).val(), orig)) { dirty = true; return false; }
+        const curRaw = String($(this).val() ?? '').trim();
+        const origRaw = String($(this).data('orig') ?? '0').trim();
+        if ($(this).data('orig') === undefined) $(this).data('orig', curRaw || '0'); // lazy seed
+
+        const sameNumber = numEq(curRaw, origRaw);
+        const sameString = curRaw === origRaw;
+
+        if (!sameNumber || !sameString) { dirty = true; return false; }
     });
 
     return dirty;
@@ -1619,3 +1638,35 @@ function addCustomerSheetUI({ id, name }) {
 
 // Optional: expose to other scripts (summary page can call it directly)
 window.addCustomerSheetUI = addCustomerSheetUI;
+
+function setSaveState($headerRow, dirty) {
+    const $btn = $headerRow.find('.save-changes-btn');
+    // visible when dirty
+    $btn.toggleClass('hidden', !dirty);
+    // enabled when dirty, disabled when clean
+    $btn.toggleClass('opacity-60 pointer-events-none', !dirty);
+}
+
+function recalcSheetCards(sheetId) {
+    const $tbody = $(`#customerTableBody-${sheetId}`);
+    let mat = 0, ship = 0;
+
+    $tbody.find('tr.customer-header-row').each(function () {
+        // numbers are like "AED 1,234.56" – use the global num()
+        mat += num($(this).find('.header-total-material').text());
+        ship += num($(this).find('.header-total-shipping').text());
+    });
+
+    // Update the two per-sheet cards
+    $(`#totalMaterial-${sheetId}`).text(aed(mat));
+    $(`#totalShipping-${sheetId}`).text(aed(ship));
+
+    // Keep remaining balance in sync (uses those two values)
+    if (typeof updateLoanLedgerTotals === 'function') {
+        const sheetName = $('#headerTitle').text().replace('Customer Sheet: ', '');
+        updateLoanLedgerTotals(sheetId, sheetName);
+    }
+
+    // Let any listeners (if you have them) react to the change
+    $(document).trigger('customerSheets:totalsUpdated', { sheetId, material: mat, shipping: ship });
+}

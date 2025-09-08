@@ -8,7 +8,7 @@
       <!-- Total Investment Amount -->
       <div class="bg-white rounded-2xl shadow-lg p-8 text-center min-w-[300px] border-l-4 border-blue-700">
         <h3 class="text-gray-500 font-medium text-sm mb-2">Total Investment Amount</h3>
-        <p id="totalInvestmentAmount-investment" class="text-2xl font-bold text-blue-700">AED 0.00</p>
+        <p id="investmentTotalAmount" class="text-2xl font-bold text-blue-700">AED 0.00</p>
       </div>
 
       <!-- Murabaha Profit Sharing -->
