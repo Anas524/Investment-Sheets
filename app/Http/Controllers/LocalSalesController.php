@@ -10,12 +10,16 @@ use Illuminate\Support\Facades\log;
 use Illuminate\Support\Facades\Storage;
 use Barryvdh\DomPDF\Facade\Pdf;
 use App\Models\LocalAttachment;
+use App\Support\ActiveCycle;
+use App\Models\Cycle;
 
 class LocalSalesController extends Controller
 {
     // GET /local-sales  -> used by loadLocalSales()
-    public function index()
+    public function index(Request $request)
     {
+        $c = ActiveCycle::id($request);
+
         $rows = Local::select([
             'id',
             'date',
@@ -28,6 +32,7 @@ class LocalSalesController extends Controller
             'vat_amount',
             'total_inc_vat',
         ])
+            ->where('cycle_id', $c)
             ->orderBy('id', 'asc')      // oldest first
             ->get()
             ->map(function ($r) {
@@ -80,7 +85,9 @@ class LocalSalesController extends Controller
             }
         }
 
-        return DB::transaction(function () use ($data, $items) {
+        return DB::transaction(function () use ($data, $items, $req) {
+            $data['cycle_id'] = ActiveCycle::id($req);
+
             /** @var \App\Models\Local $local */
             $local = Local::create($data);
 
@@ -109,6 +116,9 @@ class LocalSalesController extends Controller
 
     public function update(Request $req, Local $local)
     {
+        $c = ActiveCycle::id($req);
+        abort_if((int)$local->cycle_id !== (int)$c, 404);
+
         $data = $req->validate([
             'date'           => ['sometimes', 'date'],
             'client'         => ['sometimes', 'string', 'max:255'],
@@ -165,16 +175,21 @@ class LocalSalesController extends Controller
     }
 
     // DELETE /local-sales/{local}
-    public function destroy(Local $local)
+    public function destroy(Request $req, Local $local)
     {
+        $c = ActiveCycle::id($req);
+        abort_if((int)$local->cycle_id !== (int)$c, 404);
+
         $local->delete();
         return response()->json(['success' => true]);
     }
 
     // (optional)
-    public function items(Local $local)
+    public function items(Request $req, Local $local)
     {
-        // Option A: related table exists
+        $c = ActiveCycle::id($req);
+        abort_if((int)$local->cycle_id !== (int)$c, 404); 
+
         if (method_exists($local, 'items')) {
             $rows = $local->items()
                 ->orderBy('id')
@@ -272,9 +287,10 @@ class LocalSalesController extends Controller
         ];
     }
 
-    public function uploadAttachments(Request $request, $local)
+    public function uploadAttachments(Request $request, Local $local)
     {
-        $local = Local::findOrFail($local);
+        $c = ActiveCycle::id($request);
+        abort_if((int)$local->cycle_id !== (int)$c, 404);
 
         // create or fetch the attachment row
         $att = LocalAttachment::firstOrNew(['local_id' => $local->id]);
@@ -308,10 +324,12 @@ class LocalSalesController extends Controller
         return response()->json(['success' => true]);
     }
 
-    public function getAttachments($local)
+    public function getAttachments(Request $request, Local $local)
     {
-        $local = Local::findOrFail($local);
-        $att   = $local->attachments; // relation: Local::attachments()
+        $c = ActiveCycle::id($request);
+        abort_if((int)$local->cycle_id !== (int)$c, 404);
+
+        $att = $local->attachments;
 
         return response()->json([
             'invoice' => $att?->invoice_path ? asset('storage/' . $att->invoice_path) : null,
@@ -320,9 +338,11 @@ class LocalSalesController extends Controller
         ]);
     }
 
-    public function downloadAttachments($local)
+    public function downloadAttachments(Request $request, Local $local)
     {
-        $local = Local::findOrFail($local);
+        $c = ActiveCycle::id($request);
+        abort_if((int)$local->cycle_id !== (int)$c, 404);
+
         $att   = $local->attachments;
 
         if (!$att || (!$att->invoice_path && !$att->receipt_path && !$att->delivery_note_path)) {

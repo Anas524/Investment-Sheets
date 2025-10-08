@@ -1,6 +1,4 @@
 <div class="p-6">
-  <!-- <h2 class="text-2xl font-bold mb-4">Material Sheet</h2> -->
-
   <!-- Totals Section -->
   <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
 
@@ -282,7 +280,7 @@
         <span>Attachment Viewer – <span id="attachmentViewerTitle" class="text-gray-600 font-medium text-base"></span></span>
       </h2>
 
-      <button id="closeViewModal" class="text-gray-500 hover:text-red-600 text-2xl font-bold">&times;</button>
+      <button id="closeMaterialViewModal" class="text-gray-500 hover:text-red-600 text-2xl font-bold">&times;</button>
     </div>
 
     <!-- Modal Body (Scrollable) -->
@@ -312,10 +310,10 @@
 
     <!-- Modal Footer -->
     <div class="flex justify-end items-center gap-4 px-6 py-4 border-t bg-gray-50">
-      <button id="downloadAttachmentsBtn" class="bg-gray-700 hover:bg-gray-800 text-white px-4 py-2 rounded-md font-medium">
+      <button id="matDownloadBtn" class="bg-gray-700 hover:bg-gray-800 text-white px-4 py-2 rounded-md font-medium">
         <i class="bi bi-download"></i> Download PDF
       </button>
-      <button id="closeViewModalBottom" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-md font-medium">
+      <button id="closeMaterialViewModalBottom" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-md font-medium">
         Close
       </button>
     </div>

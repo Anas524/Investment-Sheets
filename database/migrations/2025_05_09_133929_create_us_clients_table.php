@@ -11,13 +11,15 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('us_clients', function (Blueprint $table) {
-            $table->id();
-            $table->date('date');
-            $table->decimal('amount', 10, 2);
-            $table->string('remarks')->nullable();
-            $table->timestamps();
-        });
+        if (!Schema::hasTable('us_clients')) {
+            Schema::create('us_clients', function (Blueprint $table) {
+                $table->id();
+                $table->date('date');
+                $table->decimal('amount', 10, 2);
+                $table->string('remarks')->nullable();
+                $table->timestamps();
+            });
+        }
     }
 
     /**

@@ -30,7 +30,7 @@
     <!-- Summary Box -->
     <div class="bg-white rounded-lg shadow-sm py-4 px-6 mb-6 text-center border-l-4 border-green-500">
       <h5 class="text-gray-600">Total Amount Collected for US Client Payment</h5>
-      <h3 class="text-2xl text-green-600 mt-2 font-bold" id="us-total-amount">AED {{ number_format($totalAmount, 2) }}</h3>
+      <h3 class="text-2xl text-green-600 mt-2 font-bold" id="us-total-amount">AED 0.00</h3>
     </div>
   </div>
 

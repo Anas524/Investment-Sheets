@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class CustomerSheet extends Model
 {
-    protected $fillable = ['sheet_name'];
+    protected $fillable = ['sheet_name', 'cycle_id'];
 
     public function entries()
     {

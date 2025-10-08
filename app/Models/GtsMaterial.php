@@ -3,10 +3,14 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use App\Models\Concerns\BelongsToCycle;
 
 class GtsMaterial extends Model
 {
+    use BelongsToCycle;
+
     protected $fillable = [
+        'cycle_id',
         'invoice_date',
         'invoice_no',
         'supplier_name',
@@ -14,18 +18,16 @@ class GtsMaterial extends Model
         'shipping_cost',
         'dgd',
         'labour',
+        'total_shipping_cost',
         'total_material',
+        'ui_total_material',
         'total_vat',
         'total_material_buy',
         'total_weight',
         'mode_of_transaction',
         'receipt_no',
         'remarks',
-        'items_data',
-        'status',
-        'invoice_path',
-        'receipt_path',
-        'note_path',
+        'status'
     ];
 
     protected $casts = [

@@ -4,8 +4,6 @@ use App\Http\Controllers\BeneficiaryController;
 use App\Http\Controllers\CustomerLoanLedgerController;
 use App\Http\Controllers\CustomerSheetAttachmentController;
 use App\Http\Controllers\CustomerSheetController;
-use App\Http\Controllers\CustomerSheetEntryController;
-use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\GtsInvestmentController;
 use App\Http\Controllers\GtsMaterialController;
 use App\Http\Controllers\InvestmentController;
@@ -13,15 +11,17 @@ use App\Http\Controllers\LocalSalesController;
 use App\Http\Controllers\USClientController;
 use App\Http\Controllers\SQClientController;
 use App\Http\Controllers\SummaryController;
-use App\Http\Controllers\UserPreferenceController;
+use App\Http\Controllers\CycleController;
+use App\Http\Controllers\MaterialsTotalsSnapshotController;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
+use App\Http\Middleware\BindCycleFromRoute;
 
-// Homepage
-Route::get('/', [InvestmentController::class, 'index'])->name('index');
+Route::get('/', function () {
+    return redirect()->route('cycles.index');   // ← go to Dashboard
+})->name('index');
+
+Route::get('/legacy', [InvestmentController::class, 'index'])->name('legacy.index');
 
 // Materials
 Route::get('/gts-materials', [GtsMaterialController::class, 'index']);
@@ -66,8 +66,7 @@ Route::get('/local-sales',            [LocalSalesController::class, 'index']);
 Route::post('/local-sales',            [LocalSalesController::class, 'store']);
 Route::put('/local-sales/{local}',    [LocalSalesController::class, 'update']);
 Route::delete('/local-sales/{local}',    [LocalSalesController::class, 'destroy']);
-Route::get('/local-sales/{local}/items', [LocalSalesController::class, 'items'])
-    ->name('local-sales.items');
+Route::get('/local-sales/{local}/items', [LocalSalesController::class, 'items'])->name('local-sales.items');
 
 Route::prefix('local-sales/{local}')->group(function () {
     Route::post('attachments',       [LocalSalesController::class, 'uploadAttachments']);
@@ -91,7 +90,6 @@ Route::get('/dashboard', function () {
 })->name('dashboard');
 
 Route::get('/customer/sheet/data/{sheet}', [CustomerSheetController::class, 'getSheetData']);
-
 Route::post('/customer/sheet/entry/store', [CustomerSheetController::class, 'storeEntry'])->name('customer.sheet.entry.store');
 
 // DEPRECATED – remove after confirming no traffic
@@ -103,40 +101,39 @@ Route::post('/update-customer-sheet', function (Illuminate\Http\Request $request
     return app(\App\Http\Controllers\CustomerSheetController::class)->update($request);
 })->name('customer.update');
 
-
 Route::post('/sheet/create', [CustomerSheetController::class, 'create'])->name('sheet.create');
 Route::post('/sheet/entry', [CustomerSheetController::class, 'addEntry'])->name('sheet.addEntry');
 
-Route::post('/customer-sheet/store', [CustomerSheetController::class, 'store']);
-Route::get('/customer-sheet/load/{sheetId}', [CustomerSheetController::class, 'loadCustomerSheet']);
-Route::delete('/customer-sheet/delete-entry/{id}', [CustomerSheetController::class, 'deleteEntry']);
+Route::middleware(BindCycleFromRoute::class)->group(function () {
+    Route::post('/customer-sheet/store', [CustomerSheetController::class, 'store']);
+    Route::get('/customer-sheet/load/{sheetId}', [CustomerSheetController::class, 'loadCustomerSheet']);
+    Route::delete('/customer-sheet/delete-entry/{id}', [CustomerSheetController::class, 'deleteEntry']);
+    Route::get('/customer-sheet/{sheetId}/entries', [CustomerSheetController::class, 'entries']);
+    Route::post('/customer-sheet/entry/update', [CustomerSheetController::class, 'update'])->name('customer.entry.update');
 
-Route::get('/customer-sheet/{sheetId}/entries', [CustomerSheetController::class, 'entries']);
+    Route::prefix('customer-sheet')->group(function () {
+        // for loan ledger
+        Route::get('{sheet}/loan-ledger', [CustomerLoanLedgerController::class, 'index'])->name('loan_ledger.index');
+        Route::post('{sheet}/loan-ledger', [CustomerLoanLedgerController::class, 'store'])->name('loan_ledger.store');
+        Route::put('loan-ledger/{id}', [CustomerLoanLedgerController::class, 'update'])->name('loan_ledger.update');
+        Route::delete('loan-ledger/{id}', [CustomerLoanLedgerController::class, 'destroy'])->name('loan_ledger.destroy');
 
-Route::post('/customer-sheet/entry/update', [CustomerSheetController::class, 'update'])
-    ->name('customer.entry.update');
-
-Route::prefix('customer-sheet')->group(function () {
-    // for loan ledger
-    Route::get('{sheet}/loan-ledger', [CustomerLoanLedgerController::class, 'index'])->name('loan_ledger.index');
-    Route::post('{sheet}/loan-ledger', [CustomerLoanLedgerController::class, 'store'])->name('loan_ledger.store');
-    Route::put('loan-ledger/{id}', [CustomerLoanLedgerController::class, 'update'])->name('loan_ledger.update');
-    Route::delete('loan-ledger/{id}', [CustomerLoanLedgerController::class, 'destroy'])->name('loan_ledger.destroy');
-
-    // for customer attachment
-    Route::get('{entry}/attachments/download-all', [CustomerSheetAttachmentController::class, 'downloadAll'])->name('customer.attach.downloadAll');
-    Route::get('{entry}/attachments', [CustomerSheetAttachmentController::class, 'index'])->name('customer.attach.index');
-    Route::post('{entry}/attachments', [CustomerSheetAttachmentController::class, 'store'])->name('customer.attach.store');
-    Route::delete('attachments/{id}', [CustomerSheetAttachmentController::class, 'destroy'])->name('customer.attach.destroy');
+        // for customer attachment
+        Route::get('{entry}/attachments/download-all', [CustomerSheetAttachmentController::class, 'downloadAll'])->name('customer.attach.downloadAll');
+        Route::get('{entry}/attachments', [CustomerSheetAttachmentController::class, 'index'])->name('customer.attach.index');
+        Route::post('{entry}/attachments', [CustomerSheetAttachmentController::class, 'store'])->name('customer.attach.store');
+        Route::delete('attachments/{id}', [CustomerSheetAttachmentController::class, 'destroy'])->name('customer.attach.destroy');
+    });
+    
+    // Section render
+    Route::get('/customer-sheet/section/{sheet}', [CustomerSheetController::class, 'section'])
+        ->name('customer.sheet.section');
 });
 
 Route::get('/summary/customer-sheets/totals', [SummaryController::class, 'customerSheetTotals']);
-Route::get('/summary/customer-sheets/rows',   [SummaryController::class, 'customerSheetRows'])
-    ->name('summary.customerSheets.rows');
-Route::get(
-    '/summary/customer-sheets/loans',
-    [SummaryController::class, 'customerSheetLoans']
-)->name('summary.customerSheets.loans');
+Route::get('/summary/customer-sheets/rows',   [SummaryController::class, 'customerSheetRows'])->name('summary.customerSheets.rows');
+Route::get('/summary/customer-sheets/loans', [SummaryController::class, 'customerSheetLoans'])->name('summary.customerSheets.loans');
+Route::get('/summary/us/total', [SummaryController::class, 'usClientTotal']);
 
 Route::prefix('beneficiaries')->group(function () {
     Route::get('/',            [BeneficiaryController::class, 'index']);    // optional: page route
@@ -146,61 +143,33 @@ Route::prefix('beneficiaries')->group(function () {
     Route::put('/{id}',        [BeneficiaryController::class, 'update']);   // edit and update
 });
 
-Route::get('/customer-sheet/section/{sheet}', [CustomerSheetController::class, 'section'])
-    ->name('customer.sheet.section');
 
+Route::get('/gts-materials/total', [GtsMaterialController::class, 'totals'])
+    ->name('gts.totals');
 
-Route::get('/gts-materials/total', function (Request $request) {
-    $table = 'gts_materials';
-    if (!Schema::hasTable($table)) {
-        return response()->json(['message' => "Table '$table' does not exist"], 500);
-    }
+// Cycle Manager (picker & actions)
+Route::prefix('cycles')->group(function () {
+    Route::get('/',               [CycleController::class, 'index'])->name('cycles.index');
+    Route::get('/kpis',           [CycleController::class, 'kpis'])->name('cycles.kpis');
+    Route::get('/kpis-debug', [CycleController::class, 'kpisDebug']);
 
-    $cols = Schema::getColumnListing($table);
-    $q = DB::table($table);
+    Route::post('/',              [CycleController::class, 'store'])->name('cycles.store');
+    Route::post('{cycle}/close',  [CycleController::class, 'close'])->name('cycles.close');
+    Route::post('{cycle}/reopen', [CycleController::class, 'reopen'])->name('cycles.reopen');
+});
 
-    // --- make server totals match the list ---
+Route::prefix('c/{cycle}')
+    ->middleware(['bind.cycle'])
+    ->group(function () {
+        Route::get('/investments', [InvestmentController::class, 'index'])->name('cycles.investments.page');
+        // If you later add a materials page:
+        // Route::get('/materials', [MaterialPageController::class, 'show'])->name('cycles.materials.page');
+    });
 
-    // 1) Exclude soft-deleted and “deleted” flags if present
-    if (in_array('deleted_at', $cols)) $q->whereNull('deleted_at');
-    foreach (['deleted','is_deleted','archived'] as $flag) {
-        if (in_array($flag, $cols)) $q->where($flag, 0);
-    }
+Route::get('/c/{cycle}/materials/totals', [InvestmentController::class, 'totals'])
+    ->name('cycles.materials.totals');
 
-    // 2) Optional: only “posted” rows when requested
-    if ($request->boolean('only_posted')) {
-        if (in_array('posted', $cols)) {
-            $q->where('posted', 1);
-        } elseif (in_array('is_posted', $cols)) {
-            $q->where('is_posted', 1);
-        } elseif (in_array('status', $cols)) {
-            $q->whereIn('status', ['posted','approved','completed']);
-        }
-    }
-
-    // 3) EXACT columns used by Materials header cards
-    $materialCol = in_array('total_material_buy', $cols)
-        ? 'total_material_buy'
-        : (in_array('total_material', $cols) ? 'total_material' : null);
-    $material = $materialCol ? (clone $q)->sum($materialCol) : 0;
-
-    // shipping = total_shipping_cost if present, else parts
-    $shipExpr = in_array('total_shipping_cost', $cols)
-        ? 'COALESCE(total_shipping_cost,0)'
-        : implode('+', array_map(fn($c) => "COALESCE($c,0)",
-            array_values(array_filter(['shipping_cost','dgd','labour'], fn($c)=>in_array($c,$cols)))
-          ));
-    $shipping = (float) (clone $q)->sum(DB::raw($shipExpr));
-
-    return response()->json([
-        'material'   => round($material, 2),
-        'shipping'   => round($shipping, 2),
-        'investment' => 0,
-        // optional debug to compare with the list
-        '_debug' => [
-            'matchedRows'  => (clone $q)->count(),
-            'materialCol'  => $materialCol,
-            'shippingExpr' => $shipExpr,
-        ],
-    ]);
-})->name('gts.totals');
+Route::prefix('cycles/{cycle}')->group(function () {
+    Route::post('/materials/totals/snapshot', [MaterialsTotalsSnapshotController::class, 'store'])
+        ->name('cycles.materials.totals.snapshot');
+});

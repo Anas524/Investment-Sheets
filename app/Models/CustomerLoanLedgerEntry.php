@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class CustomerLoanLedgerEntry extends Model
 {
     protected $fillable = [
+        'cycle_id',
         'customer_sheet_id',
         'date',
         'description',

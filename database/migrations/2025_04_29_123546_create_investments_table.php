@@ -11,6 +11,11 @@ return new class extends Migration
      */
     public function up(): void
     {
+        if (Schema::hasTable('investments')) {
+            // Table already exists (created earlier or manually) — mark as “done”.
+            return;
+        }
+        
         Schema::create('investments', function (Blueprint $table) {
             $table->id();
             $table->date('date')->nullable();
@@ -52,6 +57,7 @@ return new class extends Migration
      */
     public function down(): void
     {
+        if (!Schema::hasTable('investments')) return;
         Schema::dropIfExists('investments');
     }
 };

@@ -2,21 +2,31 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Cycle;
 use App\Models\USClient;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use App\Support\ActiveCycle;
 
 class USClientController extends Controller
 {
+    /* ---------- Root (cycle-aware via ActiveCycle + cycle-glue.js) ---------- */
+
     public function index(Request $request)
     {
-        $clients = USClient::orderBy('id')->get();
-        $totalAmount = USClient::sum('amount');
+        $c = ActiveCycle::id($request);
+
+        $clients = USClient::where('cycle_id', $c)
+            ->orderBy('id')
+            ->get();
+
+        $totalAmount = USClient::where('cycle_id', $c)->sum('amount');
 
         if ($request->ajax()) {
             return response()->json([
-                'clients' => $clients,
-                'totalAmount' => $totalAmount
+                'clients'      => $clients,
+                'totalAmount'  => (float) $totalAmount,
+                'cycle_id'     => $c,
             ]);
         }
 
@@ -25,51 +35,54 @@ class USClientController extends Controller
 
     public function store(Request $request)
     {
-        try {
-            $validator = Validator::make($request->all(), [
-                'date' => 'required|date',
-                'amount' => 'required|numeric',
-                'remarks' => 'nullable|string',
-            ]);
+        $validator = Validator::make($request->all(), [
+            'date'    => 'required|date',
+            'amount'  => 'required|numeric',
+            'remarks' => 'nullable|string',
+        ]);
 
-            if ($validator->fails()) {
-                return response()->json([
-                    'success' => false,
-                    'errors' => $validator->errors()
-                ], 422);
-            }
-
-            $client = USClient::create([
-                'date' => $request->date,
-                'amount' => $request->amount,
-                'remarks' => $request->remarks,
-            ]);
-
-           return response()->json(['success' => true, 'id' => $client->id]);
-        } catch (\Exception $e) {
+        if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'error' => $e->getMessage()
-            ], 500);
+                'errors'  => $validator->errors()
+            ], 422);
         }
+
+        $c = ActiveCycle::id($request);
+
+        $client = USClient::create([
+            'cycle_id' => $c,
+            'date'     => $request->date,
+            'amount'   => $request->amount,
+            'remarks'  => $request->remarks,
+        ]);
+
+        return response()->json(['success' => true, 'id' => $client->id]);
     }
 
     public function update(Request $request, $id)
     {
-        $payment = USClient::findOrFail($id);
+        $c = ActiveCycle::id($request);
+
+        $payment = USClient::where('id', $id)
+            ->where('cycle_id', $c)
+            ->firstOrFail();
+
         $payment->update($request->only(['date', 'amount', 'remarks']));
+
         return response()->json(['success' => true]);
     }
 
-    public function destroy($id)
+    public function destroy(Request $request, $id)
     {
-        $client = USClient::find($id);
+        $c = ActiveCycle::id($request);
 
-        if (!$client) {
-            return response()->json(['error' => 'Not found'], 404);
-        }
+        $client = USClient::where('id', $id)
+            ->where('cycle_id', $c)
+            ->firstOrFail();
 
         $client->delete();
+
         return response()->json(['message' => 'Deleted']);
     }
 }

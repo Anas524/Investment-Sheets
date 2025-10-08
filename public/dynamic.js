@@ -1,5 +1,42 @@
+window.sheetTotals = window.sheetTotals || { material: 0, shipping: 0, investment: 0 };
+
+function updateCombinedCard() {
+  const st = window.sheetTotals || { material: 0, shipping: 0, investment: 0 };
+  const combined = (Number(st.material) || 0) + (Number(st.investment) || 0);
+
+  const $el = $("#materialPlusInvestment");
+  if ($el.length) {
+    $el.text(`AED ${combined.toLocaleString('en-US', {
+      minimumFractionDigits: 2, maximumFractionDigits: 2
+    })}`);
+  }
+}
+
+// 3) One-time listener + initial paint
+if (!window.__gtsCombinedHooked) {
+  window.__gtsCombinedHooked = true;
+
+  document.addEventListener('gts:totals-changed', () => {
+    if (typeof updateCombinedCard === 'function') updateCombinedCard();
+  });
+
+  if (typeof updateCombinedCard === 'function') updateCombinedCard();
+}
+
 $(function () {
+  // already there
+  if (typeof fetchAndUpdateMaterialTotals === 'function') fetchAndUpdateMaterialTotals();
   fetchAndUpdateInvestmentTotal();
+
+  // init + load (guarded by element presence so other pages don’t run this)
+  if ($('#materialTableBody').length) {
+    initMaterialLogic();
+    loadGtsMaterials();
+  }
+  if ($('#investmentTableBody').length) {
+    initInvestmentLogic();
+    loadGtsInvestments();
+  }
 });
 
 function initMaterialLogic() {
@@ -89,7 +126,7 @@ function initMaterialLogic() {
 
     // Create detail row
     const $detailRow = $(`
-      <tr class="detail-row relative hidden item-row" data-new="true">
+      <tr class="detail-row relative hidden" data-new="true">
         <td colspan="8" class="p-2 bg-gray-50">
         <div class="text-center font-bold text-xl mb-4 bg-blue-200 p-2">${supplierName}</div>
 
@@ -458,20 +495,36 @@ function initMaterialLogic() {
         "X-CSRF-TOKEN": $('meta[name="csrf-token"]').attr("content")
       },
       success: function (response) {
-        // Assign the ID to the row
-        $headerRow.attr("data-id", response.id);
-        const id = $headerRow.data("id");
+        // 1) persist ids on both rows
+        const materialId = response.id;
+        $headerRow.attr("data-id", materialId);
+        $detailRow.addClass("submitted").attr("data-loaded", "true");
 
-        // Mark the detail row as submitted
-        $detailRow.addClass("submitted");
+        // 2) ensure header totals reflect what we just typed
+        calculateRowTotals($detailRow, $headerRow);
 
-        // Replace action cell content with Delete button only
-        $headerRow.find("td:last").html(`
-          <button class="delete-material-btn bg-red-500 text-white px-2 py-1 rounded ml-2">Delete</button>
-       `);
+        // 3) rebuild the full action button cluster (upload / view / delete)
+        const fullActions = `
+        <div class="action-buttons flex justify-center gap-1">
+          ${createMaterialIcon('upload-btn', 'bi-cloud-arrow-up-fill', 'Upload Attachments',
+          'bg-blue-500 hover:bg-blue-600 text-white', materialId)}
+          ${createMaterialIcon('view-btn', 'bi-paperclip', 'View Attachments',
+            'bg-gray-700 hover:bg-gray-800 text-white', materialId)}
+          ${createMaterialIcon('delete-material-btn', 'bi-trash-fill', 'Delete Row',
+              'bg-red-500 hover:bg-red-600 text-white', materialId)}
+        </div>`;
+        $headerRow.find('td:last').html(fullActions);
 
-        updateGtsTotalsFromDOM();
-        fetchAndUpdateInvestmentTotal();
+        // 4) make sure cards repaint AFTER header cells are updated
+        paintCardsFromDOM('save');
+
+        // optional: if you have server-side fetchers, keep them
+        if (typeof fetchAndUpdateMaterialTotals === 'function') fetchAndUpdateMaterialTotals(); // optional server re-sync
+        if (typeof fetchAndUpdateInvestmentTotal === 'function') fetchAndUpdateInvestmentTotal();
+
+        // 5) UX: show saved state
+        const $cell = $headerRow.find('td:last').addClass('bg-green-50');
+        setTimeout(() => $cell.removeClass('bg-green-50'), 600);
       },
       error: function (xhr) {
         console.error("Error saving material:", xhr.responseText);
@@ -555,24 +608,32 @@ function initMaterialLogic() {
   });
 
   $("#confirmDeleteBtn").on("click", function () {
-    if (!deleteTargetId || !deleteTargetHeader || !deleteTargetDetail) return;
+    if (!deleteTargetId) return;
 
     $.ajax({
       url: "/gts-materials/" + deleteTargetId,
-      method: 'DELETE',
-      headers: {
-        "X-CSRF-TOKEN": $('meta[name="csrf-token"]').attr("content")
-      },
+      method: "DELETE",
+      headers: { "X-CSRF-TOKEN": $('meta[name="csrf-token"]').attr("content") },
       success: function () {
-        deleteTargetHeader.remove();
-        deleteTargetDetail.remove();
+        // Find by id at the moment of success (avoids stale refs)
+        const selector = `#materialTableBody tr.header-row[data-id="${deleteTargetId}"]`;
+        const $header = $(selector);
+        const $detail = $(`tr.detail-row[data-id="${deleteTargetId}"]`);
 
+        // Remove both rows safely (detail may or may not be adjacent)
+        $detail.remove();
+        $header.remove();
+
+        // Renumber & repaint cards
         reindexSerialNumbers();
-        updateGtsTotalsFromDOM();
+        paintCardsFromDOM('delete');
 
+        // Also refresh totals from server so other tabs & dashboard match
+        if (typeof fetchAndUpdateMaterialTotals === 'function') fetchAndUpdateMaterialTotals();
+
+        // Close modal and clear targets
         $("#deleteConfirmModal").addClass("hidden").removeClass("flex");
-        updateGtsTotalsFromDOM();
-        fetchAndUpdateInvestmentTotal();
+        deleteTargetHeader = deleteTargetDetail = deleteTargetId = null;
       },
       error: function (xhr) {
         console.error(xhr.responseText);
@@ -600,32 +661,40 @@ function initMaterialLogic() {
     }
   });
 
+  // SINGLE ITEM DELETE
   $("#confirmItemDeleteBtn").on("click", function () {
-    const itemId = $rowToDelete.data("item-id");
-
+    const itemId = $rowToDelete && $rowToDelete.data("item-id");
     if (!itemId) return;
 
     $.ajax({
       url: `/gts-materials/items/${itemId}`,
       method: "DELETE",
-      headers: {
-        "X-CSRF-TOKEN": $('meta[name="csrf-token"]').attr("content")
-      },
-      success: function () {
-        $rowToDelete.remove();
-        $("#confirmItemDeleteModal").addClass("hidden");
-
-        // Re-check after deletion
+      headers: { "X-CSRF-TOKEN": $('meta[name="csrf-token"]').attr("content") }
+    })
+      .done(function (res) {
+        // Remove the item row in the UI
         const $detailRow = $rowToDelete.closest('.detail-row');
-        toggleUpdateButtonForDetail($detailRow);
+        const $headerRow = $detailRow.prev('.header-row');
+        $rowToDelete.remove();
 
+        // Recompute this detail+header numbers and repaint top cards
+        calculateRowTotals($detailRow, $headerRow);
+        paintCardsFromDOM('item-delete');
+
+        // Server totals (used by dashboard & cold starts)
+        if (typeof fetchAndUpdateMaterialTotals === 'function') fetchAndUpdateMaterialTotals();
+
+        // If backend returned fresh totals, update header cells directly too
+        if (res && typeof res.ui_total_material !== "undefined") {
+          $headerRow.find(".header-total-material").text(formatCurrency(res.ui_total_material));
+        }
+        $("#confirmItemDeleteModal").addClass("hidden");
         $rowToDelete = null;
-      },
-      error: function (xhr) {
+      })
+      .fail(function (xhr) {
         alert("Failed to delete item. See console for details.");
         console.error(xhr.responseText);
-      }
-    });
+      });
   });
 
   $("#cancelItemDeleteBtn").on("click", function () {
@@ -712,7 +781,7 @@ function initMaterialLogic() {
     [$invName, $recName, $noteName].forEach($s => $s.text(""));
 
     // Reset download button
-    $('#downloadAttachmentsBtn')
+    $('#matDownloadBtn')
       .addClass('pointer-events-none opacity-50')
       .text('Download PDF');
 
@@ -743,14 +812,13 @@ function initMaterialLogic() {
         apply(data.note, $note, $noteName);
 
         const hasAny = !!(data.invoice || data.receipt || data.note);
-        $('#downloadAttachmentsBtn')
+        $('#matDownloadBtn')
           .toggleClass('pointer-events-none opacity-50', !hasAny)
           .text('Download PDF');
 
         // Open modal (no jQuery animations)
         $('#viewAttachmentModal')
           .data('current-id', id)
-          .attr('data-source', 'material')
           .removeClass('hidden')
           .addClass('flex')
           .fadeIn();
@@ -796,26 +864,16 @@ function initMaterialLogic() {
       });
   });
 
-  $('#closeViewModal, #closeViewModalBottom').on('click', function () {
-    $("#viewAttachmentModal").fadeOut(300, function () {
-      $(this).addClass("hidden").removeClass("flex"); // ensure modal fully resets
-    });
+  // Materials
+  $(document).on('click', '#matDownloadBtn', function () {
+    const id = $('#viewAttachmentModal').data('current-id');
+    if (id) window.open(withCycle(`/gts-materials/download-pdf/${id}`), '_blank');
   });
 
-  $('#downloadAttachmentsBtn').on('click', function () {
-    const id = $('#viewAttachmentModal').data('current-id');
-    const source = $('#viewAttachmentModal').attr('data-source');
-
-    let downloadUrl = '';
-    if (source === 'material') {
-      downloadUrl = `/gts-materials/download-pdf/${id}`;
-    } else {
-      downloadUrl = `/investment/${id}/attachments/download`;
-    }
-
-    if (id && downloadUrl) {
-      window.open(downloadUrl, '_blank');
-    }
+  $('#closeMaterialViewModal, #closeMaterialViewModalBottom').on('click', function () {
+    $("#viewAttachmentModal").fadeOut(300, function () {
+      $(this).addClass("hidden").removeClass("flex");
+    });
   });
 
   // ONE watcher for change detection in Materials
@@ -900,8 +958,10 @@ function initMaterialLogic() {
           const $cell = $headerRow.find('td:last').addClass('bg-green-50');
           setTimeout(() => $cell.removeClass('bg-green-50'), 600);
 
-          // keep top totals in sync
-          updateGtsTotalsFromDOM();
+          calculateRowTotals($detailRow, $headerRow);
+
+          // repaint the top cards based on the DOM totals
+          paintCardsFromDOM('update');
         })
         .fail(function (xhr) {
           alert(xhr?.responseJSON?.message || 'Update failed.');
@@ -944,34 +1004,89 @@ $(document).on('change', '#gtsAttachReceipt', () => updateFileLabel('gtsAttachRe
 $(document).on('change', '#gtsAttachNote', () => updateFileLabel('gtsAttachNote', 'gtsAttachNoteFilename'));
 
 function reindexSerialNumbers() {
-  $("#materialTableBody tr").each(function (index) {
-    $(this).find("td:first").text(index + 1);
+  let i = 1;
+  $("#materialTableBody tr.header-row").each(function () {
+    $(this).find("td:first").text(i++);
   });
 }
 
+// Try multiple selector variants (input value or text content)
+function getNumber($root, selectors) {
+  for (const sel of selectors) {
+    const $el = $root.find(sel).first();
+    if ($el.length) {
+      const raw = ($el.is('input, textarea, select')) ? $el.val() : $el.text();
+      // strip currency text & thousand separators here (no external num())
+      const n = Number(String(raw ?? '').replace(/[^0-9.\-]/g, '')) || 0;
+      return n;
+    }
+  }
+  return 0;
+}
+
+// Write currency whether target is <td> or <input>
+function writeCurrency($root, selector, value) {
+  const s = formatCurrency(value);
+  $root.find(selector).each(function () {
+    const $el = $(this);
+    if ($el.is('input, textarea, select')) $el.val(s); else $el.text(s);
+  });
+}
+
+// Robust VAT interpreter: 0, %, or multiplier
+function vatAmount(base, vatRaw) {
+  const v = Number(vatRaw);
+  if (!isFinite(v) || v <= 0) return 0;
+  if (v > 1 && v < 2) return base * (v - 1.0); // 1.05 => +5%
+  if (v > 1 && v <= 100) return base * (v / 100); // 5 => 5%
+  if (v > 0 && v < 1) return base * v;           // 0.05 => 5%
+  return 0;
+}
+
+function stripZeros(n) {
+  const s = String(n);
+  return s.includes('.') ? s.replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1') : s;
+}
+
+// MAIN: recompute all live numbers for a detail + header
 function calculateRowTotals($detailRow, $headerRow) {
+  const num = (v) => {
+    if (v == null) return 0;
+    return Number(String(v).replace(/[^0-9.\-]/g, '')) || 0;
+  };
+
   let totalWeight = 0;
   let totalUnits = 0;
   let totalMaterialBuy = 0;
-  let totalVAT = 0;
+  let totalVATMoney = 0;       // monetary VAT (kept for other uses if any)
   let totalMaterialNoVAT = 0;
 
+  // Use the nearest section that actually contains header labels/inputs
+  const $scope = $detailRow.closest('.gts-material-detail, .material-card, .card, form').first().length
+    ? $detailRow.closest('.gts-material-detail, .material-card, .card, form').first()
+    : $detailRow;
+
+  // Per-row calculations
   $detailRow.find(".item-row").each(function () {
     const $row = $(this);
 
-    const units = parseFloat($row.find('[data-field="units"]').val()) || 0;
-    const unitPrice = parseFloat($row.find('[data-field="unitPrice"]').val()) || 0;
-    const vat = parseFloat($row.find('[data-field="vat"]').val()) || 0;
-    const weightPerCtn = parseFloat($row.find('[data-field="weightPerCtn"]').val()) || 0;
-    const ctns = parseFloat($row.find('[data-field="ctns"]').val()) || 0;
+    const units = num($row.find('[data-field="units"]').val());
+    const unitPrice = num($row.find('[data-field="unitPrice"]').val());
+    const vatInput = Number(($row.find('[data-field="vat"]').val() ?? '').toString().trim()) || 0;
+    const weightPerCtn = num($row.find('[data-field="weightPerCtn"]').val());
+    const ctns = num($row.find('[data-field="ctns"]').val());
 
-    const materialTotal = units * unitPrice * vat;
-    $row.find(".total-material").text(materialTotal.toFixed(2));
+    const base = units * unitPrice;                     // NO VAT
+    const vatRaw = (vatInput === 1) ? 0 : vatInput;     // treat 1 as "no VAT"
+    const vatAmt = vatAmount(base, vatRaw);
 
-    const materialNoVAT = units * unitPrice;
-    totalMaterialNoVAT += materialNoVAT;
-    totalVAT += vat;
-    totalMaterialBuy += materialTotal;
+    // MATERIALS rule: if VAT input > 1, treat as multiplier; else show base
+    const rowBuy = (vatInput > 1) ? (base * vatInput) : base;
+    $row.find(".total-material").text(rowBuy.toFixed(2));
+
+    totalMaterialNoVAT += base;
+    totalVATMoney += vatAmt;
+    totalMaterialBuy += rowBuy;
 
     const weightTotal = weightPerCtn * ctns;
     $row.find(".total-weight").text(weightTotal.toFixed(2));
@@ -979,37 +1094,58 @@ function calculateRowTotals($detailRow, $headerRow) {
     totalUnits += units;
   });
 
-  // Read shipping inputs in this row
-  const shippingCost = parseFloat($detailRow.find('[data-field="shippingCost"]').val()) || 0;
-  const dgd = parseFloat($detailRow.find('[data-field="dgd"]').val()) || 0;
-  const labour = parseFloat($detailRow.find('[data-field="labour"]').val()) || 0;
+  // Read shipping numbers (header labels or real inputs)
+  const shippingCost = getNumber($scope, [
+    '[data-field="shippingCost"]',
+    '[name="shipping_cost"]', '#shipping_cost',
+    '.shipping-cost-input', '.header-shipping-cost'
+  ]);
+  const dgd = getNumber($scope, [
+    '[data-field="dgd"]',
+    '[name="dgd"]', '#dgd',
+    '[name="dgd_charges"]', '.dgd-input', '.header-dgd'
+  ]);
+  const labour = getNumber($scope, [
+    '[data-field="labour"]',
+    '[name="labour"]', '#labour',
+    '[name="labour_charges"]', '.labour-input', '.header-labour'
+  ]);
   const totalShipping = shippingCost + dgd + labour;
 
-  // Update values in this detail row
-  $detailRow.find(".total-weight-kg").text(totalWeight.toLocaleString(undefined, { minimumFractionDigits: 2 }));
+  // Paint detail footer: weights & units
+  $detailRow.find(".total-weight-kg").text(
+    totalWeight.toLocaleString(undefined, { minimumFractionDigits: 2 })
+  );
   $detailRow.find(".total-units").text(totalUnits.toLocaleString());
 
-  $detailRow.find(".total-vat").text(formatCurrency(totalVAT));
-  $detailRow.find(".total-material-buy").text(formatCurrency(totalMaterialBuy));
-  $detailRow.find(".total-material-without-vat").text(formatCurrency(totalMaterialNoVAT));
-  $detailRow.find(".dgd-value").text(formatCurrency(dgd));
-  $detailRow.find(".labour-value").text(formatCurrency(labour));
-  $detailRow.find(".shipping-cost-value").text(formatCurrency(totalShipping));
-  $detailRow.find(".total-shipping-cost").text(formatCurrency(totalShipping));
+  // 5% VAT on total material (without VAT)
+  const computedVat = totalMaterialNoVAT * 0.05;
 
-  $headerRow.find(".header-total-material").text(formatCurrency(totalMaterialBuy));
-  $headerRow.find(".header-total-shipping").text(formatCurrency(totalShipping));
+  // Footer money cells
+  writeCurrency($detailRow, ".total-vat", computedVat);
+  writeCurrency($detailRow, ".total-material-buy", totalMaterialBuy);
+  writeCurrency($detailRow, ".total-material-without-vat", totalMaterialNoVAT);
+  writeCurrency($detailRow, ".shipping-cost-value", shippingCost);
+  writeCurrency($detailRow, ".dgd-value", dgd);
+  writeCurrency($detailRow, ".labour-value", labour);
 
-  updateGtsTotalsFromDOM();
+  // *** THE FIX: total shipping = shipping + dgd + labour ***
+  writeCurrency($detailRow, ".total-shipping-cost", totalShipping);
 
+  // Header paints
+  writeCurrency($headerRow, ".header-total-material", totalMaterialBuy);
+  writeCurrency($headerRow, ".header-total-shipping", totalShipping);
+
+  // Defensive final paint so no legacy code overwrites it
+  queueMicrotask(() => {
+    writeCurrency($detailRow, ".total-shipping-cost", totalShipping);
+    writeCurrency($headerRow, ".header-total-shipping", totalShipping);
+  });
+
+  // Notify rest of app / caches (one call is enough)
+  if (typeof updateGtsTotalsFromDOM === 'function') updateGtsTotalsFromDOM();
+  document.dispatchEvent(new CustomEvent('gts:totals-changed'));
 }
-
-// cache for cross-sheet values
-window.sheetTotals = {
-  material: 0,
-  shipping: 0,
-  investment: 0
-};
 
 function updateMaterialTotals(totalMaterial, totalShipping) {
   const material = Number(totalMaterial) || 0;
@@ -1022,47 +1158,19 @@ function updateMaterialTotals(totalMaterial, totalShipping) {
   // save for Summary cold-starts (now with inv too)
   setGtsTotalsToStorage({ material, shipping, investment });
 
-  // live update for open Summary tab
-  $(document).trigger('gts:totalsUpdated', [{ material, shipping, investment }]);
-
   // native listeners
   document.dispatchEvent(new CustomEvent('gts:totals-changed', {
     detail: { material, shipping, investment }
   }));
 }
 
-// helpers
-function setGtsTotalsToStorage(obj) {
-  try {
-    localStorage.setItem('gtsTotals', JSON.stringify({
-      material: Number(obj.material) || 0,
-      shipping: Number(obj.shipping) || 0,
-      investment: Number(obj.investment) || 0
-    }));
-  } catch { }
-}
-
-function getGtsTotalsFromStorage() {
-  try {
-    const raw = localStorage.getItem('gtsTotals');
-    if (!raw) return null;
-    const o = JSON.parse(raw);
-    return {
-      material: Number(String(o.material).replace(/[^\d.-]/g, '')) || 0,
-      shipping: Number(String(o.shipping).replace(/[^\d.-]/g, '')) || 0,
-      investment: Number(String(o.investment).replace(/[^\d.-]/g, '')) || 0
-    };
-  } catch { return null; }
+function gtsTotalsKey() {
+  return 'gtsTotals:' + String(window.activeCycleId ?? 'global');
 }
 
 function updateInvestmentTotals(investmentTotal) {
   const investment = Number(investmentTotal) || 0;
   window.sheetTotals.investment = investment;
-
-  // If you show the green card on Summary or Materials:
-  $('#totalInvestmentAmount-investment').text(
-    `AED ${investment.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-  );
 
   setGtsTotalsToStorage({
     material: Number(window.sheetTotals.material) || 0,
@@ -1070,22 +1178,14 @@ function updateInvestmentTotals(investmentTotal) {
     investment
   });
 
-  // notify Summary so KPI Cash Out refreshes immediately
-  $(document).trigger('gts:totalsUpdated', [{
-    material: Number(window.sheetTotals.material) || 0,
-    shipping: Number(window.sheetTotals.shipping) || 0,
-    investment
-  }]);
-}
-
-function updateCombinedCard() {
-  const material = window.sheetTotals.material || 0;
-  const investment = window.sheetTotals.investment || 0;
-  const combined = material + investment;
-
-  $("#materialPlusInvestment").text(
-    `AED ${combined.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-  );
+  // optional native event (safe; Summary doesn’t consume it)
+  document.dispatchEvent(new CustomEvent('gts:totals-changed', {
+    detail: {
+      material: Number(window.sheetTotals.material) || 0,
+      shipping: Number(window.sheetTotals.shipping) || 0,
+      investment
+    }
+  }));
 }
 
 function formatCurrency(value) {
@@ -1097,7 +1197,8 @@ function formatCurrency(value) {
 }
 
 function loadGtsMaterials() {
-  $.get('/gts-materials', function (data) {
+  const url = (typeof withCycle === 'function') ? withCycle('/gts-materials') : '/gts-materials';
+  $.get(url, function (data) {
     if (!Array.isArray(data)) {
       console.error('Invalid response:', data);
       return;
@@ -1109,6 +1210,7 @@ function loadGtsMaterials() {
     data.reverse().forEach(function (entry, index) {
       const id = entry.id;
       const serialNo = index + 1;
+      const num = (v) => Number(String(v ?? 0).replace(/[^0-9.\-]/g, '')) || 0;
 
       // Format the date
       const date = new Date(entry.invoice_date);
@@ -1128,12 +1230,16 @@ function loadGtsMaterials() {
       `;
 
       // compute exactly what the cards/summary use
-      const headerMat = Number(entry.total_material_buy ?? 0);  // NOT total_material
-      const headerShip = (entry.total_shipping_cost != null)
-        ? Number(entry.total_shipping_cost)
-        : (Number(entry.shipping_cost) || 0) +
-        (Number(entry.dgd) || 0) +
-        (Number(entry.labour) || 0);
+      const headerMat = num(
+        entry.ui_total_material ?? entry.total_material_buy ?? entry.total_material ?? 0
+      );
+
+      const headerShip = (() => {
+        const tsc = num(entry.total_shipping_cost);
+        if (tsc) return tsc; // prefer explicit total if present (even as string)
+        // fallback: sum individual parts
+        return num(entry.shipping_cost) + num(entry.dgd) + num(entry.labour);
+      })();
 
       // Create header row
       const $headerRow = $(`
@@ -1154,7 +1260,7 @@ function loadGtsMaterials() {
       `);
 
       const $detailRow = $(`
-        <tr class="investment-detail-row detail-row relative hidden" data-id="${id}">
+        <tr class="detail-row relative hidden" data-id="${id}">
           <td colspan="8" class="p-2 bg-gray-50">
           <div class="text-center font-bold text-xl mb-4 bg-blue-200 p-2">${entry.supplier_name}</div>
 
@@ -1298,7 +1404,7 @@ function loadGtsMaterials() {
 
       // Update summary fields inside detail row
       $detailRow.find('.total-weight-kg').text(entry.total_weight || 0);
-      $detailRow.find('.total-vat').text(formatCurrency(entry.total_vat));
+      $detailRow.find('.total-vat').text((entry.vat_display ?? '0'));
       $detailRow.find('.total-material-buy').text(formatCurrency(entry.total_material_buy));
       $detailRow.find('.dgd-value').text(formatCurrency(entry.dgd));
       $detailRow.find('.labour-value').text(formatCurrency(entry.labour));
@@ -1341,7 +1447,7 @@ function loadGtsMaterials() {
 
           // Calculated
           const totalMaterial = (item.unit_price || 0) * (item.units || 0);
-          const totalWeight = (item.weight_per_ctn || 0) * (item.no_of_ctns || 0);
+          const totalWeight = (item.weight_per_ctn || 0) * (item.ctns || 0);
           $row.find('.total-material').text(formatCurrency(totalMaterial));
           $row.find('.total-weight').text(formatCurrency(totalWeight));
 
@@ -1359,35 +1465,37 @@ function loadGtsMaterials() {
       const $headerRow = $detailRow.prev(".header-row");
       calculateRowTotals($detailRow, $headerRow);
     });
-    updateGtsTotalsFromDOM();
+
+    paintCardsFromDOM('dom');
+
     fetchAndUpdateInvestmentTotal();
   });
 }
 
-// === keep top cards + cache in sync (Materials) ===
+// Collect numbers from the row DOM. Do NOT paint cards from here.
+// We only compute + cache, and return the sums.
 function updateGtsTotalsFromDOM() {
+  const num = (v) => Number(String(v ?? 0).replace(/[^0-9.\-]/g, '')) || 0;
   let totalMaterial = 0;
   let totalShipping = 0;
 
   $('.header-total-material').each(function () {
-    totalMaterial += parseFloat(String($(this).text()).replace(/[^\d.-]/g, '')) || 0;
+    totalMaterial += num($(this).text());
   });
   $('.header-total-shipping').each(function () {
-    totalShipping += parseFloat(String($(this).text()).replace(/[^\d.-]/g, '')) || 0;
+    totalShipping += num($(this).text());
   });
 
-  // update the two cards on the Materials sheet
-  $('#gtsMaterialTotal').text(
-    `AED ${totalMaterial.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-  );
-  $('#gtsShippingTotal').text(
-    `AED ${totalShipping.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-  );
-
-  // push into the shared cache + notify Summary
-  if (typeof updateMaterialTotals === 'function') {
-    updateMaterialTotals(totalMaterial, totalShipping); // no zero guard
+  // OPTIONAL: cache for cold starts on other tabs; DO NOT PAINT here.
+  if (typeof window.setGtsTotalsToStorage === 'function') {
+    window.setGtsTotalsToStorage({
+      material: totalMaterial,
+      shipping: totalShipping,
+      investment: Number(window.sheetTotals?.investment) || 0,
+    });
   }
+
+  return { material: totalMaterial, shipping: totalShipping };
 }
 
 // Materials-only icon button factory (does not collide with Investment's createIconButton)
@@ -1456,7 +1564,7 @@ function buildMaterialSnapshot($detailRow) {
     mot: t($detailRow.find('input[placeholder="Enter Transaction Method"]').val()),
     receipt: t(($detailRow.find('textarea.receipt-no-textarea').val() || '').replace(/\r/g, '')),
     remarks: t($detailRow.find('textarea[placeholder="Enter Remarks"]').val()),
-    sshipping: t($detailRow.find('input[data-field="shippingCost"]').val()),
+    shipping: t($detailRow.find('input[data-field="shippingCost"]').val()),
     dgd: t($detailRow.find('input[data-field="dgd"]').val()),
     labour: t($detailRow.find('input[data-field="labour"]').val()),
     items: []
@@ -1516,6 +1624,25 @@ function toggleUpdateButtonForDetail($detailRow) {
   }
 }
 
+function paintCardsFromDOM(origin) {
+  const sums = updateGtsTotalsFromDOM(); // { material, shipping }
+  if (typeof window.updateTotals === 'function') {
+    window.updateTotals(
+      {
+        material: sums.material,
+        shipping: sums.shipping,
+        investment: Number(window.sheetTotals?.investment) || 0
+      },
+      {
+        origin: origin || 'dom',
+        force: true,              // bypass origin/reqId priority
+        allowAfterLock: true      // bypass __materialsLocked
+      }
+    );
+  }
+  document.dispatchEvent(new CustomEvent('gts:totals-changed'));
+}
+
 function initInvestmentLogic() {
   $.ajaxSetup({
     headers: {
@@ -1528,8 +1655,8 @@ function initInvestmentLogic() {
 
   $("#addInvestmentRowBtn").on("click", function () {
     // Reset the modal fields
-    $("#investmentDate").val("");
-    $("#investmentInvestor").val("");
+    $("#modalInvestmentDate").val("");
+    $("#modalInvestmentInvestor").val("");
 
     // Show the modal
     $("#investmentRowModal").removeClass("hidden").addClass("flex");
@@ -1565,8 +1692,7 @@ function initInvestmentLogic() {
     $(this).next(".investment-detail-row").toggleClass("hidden");
   });
 
-
-  $(document).on("input", ".investment-amount-input", function () {
+  $(document).on("input", ".investment-amount", function () {
     const $input = $(this);
     const rawValue = $input.val().trim().replace(/,/g, "");
     const numericValue = parseFloat(rawValue);
@@ -1604,6 +1730,7 @@ function initInvestmentLogic() {
 
   $(document).on("click", ".submit-investment-btn", function (e) {
     e.preventDefault();
+    if (!ensureOpenOrToast()) return;
 
     const $headerRow = $(this).closest("tr");
     const $detailRow = $headerRow.next(".investment-detail-row");
@@ -1632,7 +1759,7 @@ function initInvestmentLogic() {
     const $submitBtn = $headerRow.find(".submit-investment-btn");
 
     $.ajax({
-      url: "/investments",
+      url: withCycle("/investments"),
       method: "POST",
       data: {
         date: investmentDate,
@@ -1697,9 +1824,10 @@ function initInvestmentLogic() {
     const investmentId = $headerRow.data("id");
 
     if (!confirm("Are you sure you want to delete this investment?")) return;
+    if (!ensureOpenOrToast()) return;
 
     $.ajax({
-      url: `/investments/${investmentId}`,
+      url: withCycle(`/investments/${investmentId}`),
       method: "DELETE",
       headers: {
         "X-CSRF-TOKEN": $('meta[name="csrf-token"]').attr("content")
@@ -1741,6 +1869,8 @@ function initInvestmentLogic() {
   });
 
   $(document).on("click", ".invest-save-changes-btn", function () {
+    if (!ensureOpenOrToast()) return;
+
     if (!$(this).closest('#sheet-gts-investment').length) return;
     const $form = $(this).closest("form");
     const $detailRow = $form.closest("tr.investment-detail-row");
@@ -1767,7 +1897,7 @@ function initInvestmentLogic() {
     };
 
     $.ajax({
-      url: `/investments/${investmentId}`,
+      url: withCycle(`/investments/${investmentId}`),
       method: "PUT",
       data: updatedData,
       success: function () {
@@ -1786,6 +1916,8 @@ function initInvestmentLogic() {
 
         // Hide save button again
         $form.find(".save-changes-btn").addClass("hidden");
+
+        fetchAndUpdateInvestmentTotal();
 
         alert("Changes saved!");
       },
@@ -1818,7 +1950,7 @@ function initInvestmentLogic() {
     $("#invoiceFileName, #receiptFileName, #noteFileName").val('');
 
     // Load existing file names
-    $.get(`/investment/${investmentId}/attachments`, function (res) {
+    $.get(withCycle(`/investment/${investmentId}/attachments`), function (res) {
       if (res.invoice) {
         $("#invoiceFileName").val(res.invoice.split('/').pop());
       }
@@ -1841,6 +1973,7 @@ function initInvestmentLogic() {
 
   $("#attachmentUploadForm").on("submit", function (e) {
     e.preventDefault();
+    if (!ensureOpenOrToast()) return;
 
     const investmentId = $("#uploadAttachmentModal").data("investment-id"); // this must NOT be undefined
 
@@ -1853,7 +1986,7 @@ function initInvestmentLogic() {
     formData.append("_token", $('meta[name="csrf-token"]').attr("content"));
 
     $.ajax({
-      url: `/investment/${investmentId}/upload-attachments`,
+      url: withCycle(`/investment/${investmentId}/upload-attachments`),
       method: "POST",
       data: formData,
       processData: false,
@@ -1894,13 +2027,13 @@ function initInvestmentLogic() {
     [$invName, $recName, $noteName].forEach($s => $s.text(""));
 
     // Disable download button initially
-    $('#downloadAttachmentsBtn')
+    $('#invDownloadBtn')
       .addClass('pointer-events-none opacity-50')
       .text('Download PDF');
 
     // Fetch and apply attachment URLs
     $.ajax({
-      url: `/investment/${id}/attachments`,
+      url: withCycle(`/investment/${id}/attachments`),
       type: 'GET',
       success: function (data) {
 
@@ -1932,14 +2065,13 @@ function initInvestmentLogic() {
         }
 
         if (data.invoice || data.receipt || data.note) {
-          $('#downloadAttachmentsBtn')
+          $('#invDownloadBtn')
             .removeClass('pointer-events-none opacity-50')
             .text('Download PDF');
         }
 
         $('#investmentAttachmentModal')
           .data('current-id', id)
-          .attr('data-source', 'investment')
           .removeClass('hidden')
           .addClass('flex')
           .fadeIn();
@@ -1950,23 +2082,16 @@ function initInvestmentLogic() {
     });
   });
 
-  $(document).on("click", "#closeViewModal, #closeViewModalBottom", function () {
+  // Investments
+  $(document).on('click', '#invDownloadBtn', function () {
+    const id = $('#investmentAttachmentModal').data('current-id');
+    if (id) window.open(withCycle(`/investment/${id}/attachments/download`), '_blank');
+  });
+
+  $('#closeInvestmentViewModal, #closeInvestmentViewModalBottom').on('click', function () {
     $("#investmentAttachmentModal").fadeOut(200, function () {
       $(this).addClass("hidden").css("display", "none");
     });
-  });
-
-  $(document).on('click', '#downloadAttachmentsBtn', function () {
-    const source = $('#investmentAttachmentModal').attr('data-source');
-    const id = $('#investmentAttachmentModal').data('current-id');
-
-    if (!id || !source) return;
-
-    if (source === 'investment') {
-      window.open(`/investment/${id}/attachments/download`, '_blank');
-    } else if (source === 'material') {
-      window.open(`/gts-materials/download-pdf/${id}`, '_blank');
-    }
   });
 
   let currentMurabahaRowId = null;
@@ -2006,6 +2131,8 @@ function initInvestmentLogic() {
   });
 
   $("#saveMurabahaDateBtn").on("click", function () {
+    if (!ensureOpenOrToast()) return;
+
     const selectedDate = $("#murabahaDateInput").val();
     const investmentId = $("#murabahaDateModal").data("investment-id"); // match modal ID
 
@@ -2015,7 +2142,7 @@ function initInvestmentLogic() {
     }
 
     $.ajax({
-      url: `/investment/${investmentId}/murabaha`,
+      url: withCycle(`/investment/${investmentId}/murabaha`),
       method: 'POST',
       data: {
         murabaha_status: "yes",
@@ -2038,6 +2165,8 @@ function initInvestmentLogic() {
   $(document)
     .off('click.investUpdate')
     .on('click.investUpdate', '.update-invest-btn', function () {
+      if (!ensureOpenOrToast()) return;
+
       const $headerRow = $(this).closest('tr.investment-header');
       const $detailRow = $headerRow.next('.investment-detail-row');
       const id = $headerRow.data('id');
@@ -2062,7 +2191,7 @@ function initInvestmentLogic() {
       };
 
       $.ajax({
-        url: `/investments/${id}`,
+        url: withCycle(`/investments/${id}`),
         method: 'PUT',
         headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') },
         data: payload
@@ -2163,7 +2292,7 @@ function createInvestmentLayout(
         </button>` : ''}
 
       ${createInvestmentIconButton('investment-attachment-btn', 'bi-cloud-arrow-up-fill', 'Upload Attachments', 'bg-blue-500 hover:bg-blue-600 text-white', investmentId)}
-      ${createInvestmentIconButton('btn-view-attachment', 'bi bi-paperclip', 'View Attachments', 'bg-gray-700 hover:bg-gray-800 text-white', investmentId)}
+      ${createInvestmentIconButton('btn-view-attachment', 'bi-paperclip', 'View Attachments', 'bg-gray-700 hover:bg-gray-800 text-white', investmentId)}
       ${createInvestmentIconButton('delete-investment-btn', 'bi-trash-fill', 'Delete Row', 'bg-red-500 hover:bg-red-600 text-white', investmentId)}
     </div>
   `;
@@ -2323,7 +2452,7 @@ function createInvestmentLayout(
 
   $form.data("original", originalData);
 
-  $detailRow.find("#investmentAmount").on("input", function () {
+  $detailRow.find(".investment-amount").on("input", function () {
     const amount = parseFloat($(this).val()) || 0;
     const formatted = `AED ${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -2375,7 +2504,7 @@ function escapeHtml(text) {
 
 function loadGtsInvestments() {
   $.ajax({
-    url: "/investments",
+    url: withCycle("/investments"),
     method: "GET",
     success: function (data) {
       $("#investmentTableBody").empty();
@@ -2418,69 +2547,27 @@ function updateInvestmentSerialNumbers() {
 }
 
 function fetchAndUpdateInvestmentTotal() {
-  const url = (typeof window.investmentUrl === 'function')
-    ? window.investmentUrl('gts-investments/total')   // live (prefixed)
-    : '/gts-investments/total';                       // local
+  const url = (typeof withCycle === 'function')
+    ? withCycle('/gts-investments/total')
+    : '/gts-investments/total';
 
   return $.getJSON(url)
     .then(res => {
-      const total = Number(res?.total ?? 0) || 0;
-      applyInvestmentTotal(total);
+      const total = Number(res?.total ?? res?.investment ?? 0) || 0;
+
+      // hand off to the single source of truth (gts-totals.js)
+      if (typeof window.updateInvestmentTotals === 'function') {
+        window.updateInvestmentTotals(total);   // paints + caches
+      }
       return total;
     })
     .catch(err => {
-      console.error('investment total fetch failed', err);
-      applyInvestmentTotal(0);
+      console.error('[investment] total fetch failed', err);
+      if (typeof window.updateInvestmentTotals === 'function') {
+        window.updateInvestmentTotals(0);       // safe fallback
+      }
       return 0;
     });
-}
-
-// Write everywhere + broadcast
-function applyInvestmentTotal(total) {
-  const formatted = 'AED ' + (Number(total) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  $('#investmentTotalAmount').text(formatted);              // investment tab card (if present)
-  $('#totalInvestmentAmount-investment').text(formatted);   // Summary card
-  $('#totalInvestmentAmount-material').text(formatted);     // any legacy alias
-
-  // cache for summary renderer
-  window.sheetTotals = window.sheetTotals || {};
-  window.sheetTotals.investment = Number(total) || 0;
-
-  // Tell Summary (if it listens)
-  $(document).trigger('gts:totalsUpdated', [{
-    material: Number(window.sheetTotals.material) || 0,
-    shipping: Number(window.sheetTotals.shipping) || 0,
-    investment: Number(total) || 0,
-  }]);
-}
-
-// Write to every place that might display the investment sum + broadcast
-function applyInvestmentTotal(total) {
-  const formatted = `AED ${Number(total || 0).toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  })}`;
-
-  // Investment sheet (new unique ID)
-  $("#investmentTotalAmount").text(formatted);
-
-  // Legacy IDs used elsewhere (Summary / Materials cards that show investment)
-  $("#totalInvestmentAmount-investment").text(formatted);
-  $("#totalInvestmentAmount-material").text(formatted);
-
-  // cache + broadcast
-  window.sheetTotals = window.sheetTotals || {};
-  window.sheetTotals.investment = Number(total) || 0;
-
-  // If you persist others, keep them; otherwise default to 0
-  const payload = {
-    material: Number(window.sheetTotals.material) || 0,
-    shipping: Number(window.sheetTotals.shipping) || 0,
-    investment: Number(total) || 0
-  };
-
-  // Use the same event your Summary listener expects
-  $(document).trigger('gts:totalsUpdated', [payload]);
 }
 
 // Build a snapshot of a detail row (for change detection)
@@ -2549,3 +2636,12 @@ function toggleUpdateButtonForInvestment($detailRow) {
     $existing.remove();
   }
 }
+
+(function purgeLegacyBenKeys() {
+  try {
+    ['localTotal', 'sqTotal', 'usTotal', 'gtsTotals', 'customerTotals'].forEach(k =>
+      localStorage.removeItem(k)
+    );
+    localStorage.removeItem('localSalesTotal');
+  } catch { }
+})();

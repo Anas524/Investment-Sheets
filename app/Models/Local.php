@@ -3,12 +3,15 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use App\Models\Concerns\BelongsToCycle;
 
 class Local extends Model
 {
+    use BelongsToCycle;
+    
     protected $fillable = [
         'date','client','description','payment_status','remarks',
-        'total_units','total_ex_vat','vat_amount','total_inc_vat',
+        'total_units','total_ex_vat','vat_amount','total_inc_vat','cycle_id',
     ];
 
     protected $casts = [

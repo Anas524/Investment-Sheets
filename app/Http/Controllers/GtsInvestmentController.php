@@ -3,26 +3,39 @@
 namespace App\Http\Controllers;
 
 use App\Models\GtsInvestment;
+use App\Models\Cycle;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
-use Barryvdh\DomPDF\Facade\Pdf;
-use setasign\Fpdi\Tcpdf\Fpdi;
+use App\Support\ActiveCycle;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 
 class GtsInvestmentController extends Controller
 {
-    public function index()
+    private function findInActiveCycleOrFail(Request $request, $id): GtsInvestment
     {
-        $investments = GtsInvestment::orderBy('created_at', 'asc')->get();
+        $c = ActiveCycle::id($request);
+        return GtsInvestment::where('id', $id)
+            ->where('cycle_id', $c)
+            ->firstOrFail();
+    }
+
+    public function index(Request $request)
+    {
+        $c = ActiveCycle::id($request);
+        $investments = GtsInvestment::where('cycle_id', $c)
+            ->orderBy('created_at', 'asc')
+            ->get();
         return response()->json($investments);
     }
 
     public function store(Request $request)
     {
         try {
-            Log::info('Incoming Data:', $request->all());
+            $c = ActiveCycle::id($request);
 
             $investment = GtsInvestment::create([
+                'cycle_id'           => $c,
                 'date' => $request->date,
                 'investor' => $request->investor,
                 'investment_amount' => $request->investment_amount ?? 0,
@@ -38,20 +51,15 @@ class GtsInvestmentController extends Controller
             ]);
 
             return response()->json($investment);
-        } catch (\Exception $e) {
-            Log::error('Investment Save Error', [
-                'message' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-
+        } catch (\Throwable $e) {
+            Log::error('Investment Save Error', ['message' => $e->getMessage()]);
             return response()->json(['error' => $e->getMessage()], 500);
         }
     }
 
     public function update(Request $request, $id)
     {
-        $investment = GtsInvestment::findOrFail($id);
-
+        $investment = $this->findInActiveCycleOrFail($request, $id);
         $investment->update([
             'date' => $request->date,
             'investor' => $request->investor,
@@ -69,35 +77,47 @@ class GtsInvestmentController extends Controller
         return response()->json($investment);
     }
 
-    public function finalize($id)
+    public function finalize(Request $request, $id)
     {
-        $investment = GtsInvestment::findOrFail($id);
+        $investment = $this->findInActiveCycleOrFail($request, $id);
         $investment->is_finalized = true;
         $investment->save();
 
         return response()->json(['message' => 'Investment finalized successfully.']);
     }
 
-    public function destroy($id)
+    public function destroy(Request $request, $id)
     {
-        try {
-            GtsInvestment::findOrFail($id)->delete();
-            return response()->json(['message' => 'Deleted']);
-        } catch (\Exception $e) {
-            Log::error('Delete Error:', ['message' => $e->getMessage()]);
-            return response()->json(['error' => 'Server error'], 500);
-        }
+        $investment = $this->findInActiveCycleOrFail($request, $id);
+        $investment->delete();
+        return response()->json(['message' => 'Deleted']);
     }
 
-    public function getTotalAmount()
+    public function getTotalAmount(Request $request)
     {
-        $total = \App\Models\GtsInvestment::sum('investment_amount');
-        return response()->json(['total' => $total]);
+        $c = ActiveCycle::id($request);
+
+        // Pick the correct column name safely
+        $col = Schema::hasColumn('gts_investments', 'investment_amount')
+            ? 'investment_amount'
+            : (Schema::hasColumn('gts_investments', 'amount') ? 'amount' : null);
+
+        if (!$col) {
+            return response()->json([
+                'total' => 0,
+                '_warn' => 'No amount column found on gts_investments (expected investment_amount or amount)',
+            ]);
+        }
+
+        // If model uses BelongsToCycle:
+        $total = GtsInvestment::where('cycle_id',$c)->sum($col);
+
+        return response()->json(['total' => round((float) $total, 2)]);
     }
 
     public function uploadAttachments(Request $request, $id)
     {
-        $investment = GtsInvestment::findOrFail($id);
+        $investment = $this->findInActiveCycleOrFail($request, $id);
 
         // Delete old invoice if new one uploaded
         if ($request->hasFile('invoice')) {
@@ -131,9 +151,9 @@ class GtsInvestmentController extends Controller
         return response()->json(['success' => true]);
     }
 
-    public function getAttachments($id)
+    public function getAttachments(Request $request, $id)
     {
-        $investment = GtsInvestment::findOrFail($id);
+        $investment = $this->findInActiveCycleOrFail($request, $id);
 
         return response()->json([
             'invoice' => $investment->invoice ? asset('storage/' . $investment->invoice) : null,
@@ -142,9 +162,9 @@ class GtsInvestmentController extends Controller
         ]);
     }
 
-    public function downloadAttachments($id)
+    public function downloadAttachments(Request $request, $id)
     {
-        $investment = GtsInvestment::findOrFail($id);
+        $investment = $this->findInActiveCycleOrFail($request, $id);
 
         $html = '
             <style>
@@ -165,35 +185,34 @@ class GtsInvestmentController extends Controller
             <h2>GTS Investment Attachments</h2>
         ';
 
-        function embedImageIfExists($path, $title)
-        {
-            if (!$path || !Storage::disk('public')->exists($path)) return '';
-
-            $fullPath = Storage::disk('public')->path($path);
-            $ext = pathinfo($fullPath, PATHINFO_EXTENSION);
-            $data = file_get_contents($fullPath);
-            $base64 = 'data:image/' . $ext . ';base64,' . base64_encode($data);
-
-            return "
-        <div class='attachment-block'>
-            <h3>$title</h3>
-            <img src='$base64' alt='$title Attachment'>
-        </div>
-        ";
-        }
-
-        $html .= embedImageIfExists($investment->invoice, 'Invoice');
-        $html .= embedImageIfExists($investment->receipt, 'Receipt');
-        $html .= embedImageIfExists($investment->note, 'Delivery Note');
+        $html .= $this->embedImageIfExists($investment->invoice, 'Invoice');
+        $html .= $this->embedImageIfExists($investment->receipt, 'Receipt');
+        $html .= $this->embedImageIfExists($investment->note, 'Delivery Note');
 
         $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadHTML($html)->setPaper('a4', 'portrait');
-
         return $pdf->download("investment_attachments_{$id}.pdf");
+    }
+
+    private function embedImageIfExists($path, $title)
+    {
+        if (!$path || !Storage::disk('public')->exists($path)) return '';
+
+        $fullPath = Storage::disk('public')->path($path);
+        $ext = pathinfo($fullPath, PATHINFO_EXTENSION);
+        $data = file_get_contents($fullPath);
+        $base64 = 'data:image/' . $ext . ';base64,' . base64_encode($data);
+
+        return "
+            <div class='attachment-block'>
+                <h3>$title</h3>
+                <img src='$base64' alt='$title Attachment'>
+            </div>
+        ";
     }
 
     public function updateMurabaha(Request $request, $id)
     {
-        $investment = GtsInvestment::findOrFail($id);
+        $investment = $this->findInActiveCycleOrFail($request, $id);
 
         $investment->murabaha_status = $request->murabaha_status;
         $investment->murabaha_date = $request->murabaha_date;

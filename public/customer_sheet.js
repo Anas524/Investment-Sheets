@@ -141,14 +141,14 @@ $(document).ready(function () {
                 <div class="flex items-center gap-1 border-b p-2 w-full bg-yellow-100">
                     <span class="font-medium">AED</span>
                     <input type="number" value="0" min="0" 
-                        class="dgd-input shipping-input w-full bg-yellow-100 border-0 focus:outline-none" />
+                        class="dgd-input w-full bg-yellow-100 border-0 focus:outline-none" />
                 </div>
 
                 <div class="flex items-center border-b p-2 font-semibold w-full">Labour:</div>
                 <div class="flex items-center gap-1 border-b p-2 w-full bg-yellow-100">
                     <span class="font-medium">AED</span>
                     <input type="number" value="0" min="0" 
-                        class="labour-input shipping-input w-full bg-yellow-100 border-0 focus:outline-none" />
+                        class="labour-input w-full bg-yellow-100 border-0 focus:outline-none" />
                 </div>
 
                 <div class="flex items-center p-2 font-semibold w-full">Total Shipping Cost:</div>
@@ -169,7 +169,7 @@ $(document).ready(function () {
         // Call this function to bind calculation immediately
         bindLiveCalculation($detailRow, $headerRow);
 
-        $detailRow.find('.total-shipping-cost').text(fmt(0));
+        $detailRow.find('.total-shipping-cost').text(aed(0));
 
         // Close Modal & Reset
         $('#customerAddRowModal').addClass('hidden').removeClass('flex');
@@ -291,7 +291,7 @@ $(document).ready(function () {
 
         // ---- POST -> save ----
         $.post({
-            url: '/customer-sheet/store',
+            url: withCycle('/customer-sheet/store'),
             data: payload,
             headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
         })
@@ -330,7 +330,7 @@ $(document).ready(function () {
         if (!rowToDeleteId) return;
 
         $.ajax({
-            url: `/customer-sheet/delete-entry/${rowToDeleteId}`,
+            url: withCycle(`/customer-sheet/delete-entry/${rowToDeleteId}`),
             method: 'DELETE',
             data: { _token: $('meta[name="csrf-token"]').attr('content') }
         })
@@ -429,7 +429,7 @@ $(document).ready(function () {
 
             $detailRow.find('.total-units').text(sumUnits.toFixed(2));
             $detailRow.find('.total-weight-kg').text(sumWeight.toFixed(2));
-            $detailRow.find('.total-shipping-cost').text(shipTotal.toFixed(2));
+            $detailRow.find('.total-shipping-cost').text(aed(shipTotal));
 
             const payload = {
                 id: entryId,
@@ -468,7 +468,7 @@ $(document).ready(function () {
 
             $.ajax({
                 type: 'POST',
-                url: UPDATE_URL,
+                url: withCycle(UPDATE_URL),
                 data: payload,
                 headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
             })
@@ -523,8 +523,8 @@ $(document).ready(function () {
         const headers = { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') };
 
         const req = id
-            ? $.ajax({ url: window.routes.loanLedgerUpdate.replace(':id', id), method: 'PUT', headers, data: payload })
-            : $.ajax({ url: window.routes.loanLedgerStore.replace(':sheetId', sheetId), method: 'POST', headers, data: payload });
+            ? $.ajax({ url: withCycle(window.routes.loanLedgerUpdate.replace(':id', id)), method: 'PUT', headers, data: payload })
+            : $.ajax({ url: withCycle(window.routes.loanLedgerStore.replace(':sheetId', sheetId)), method: 'POST', headers, data: payload });
 
         req.done(() => {
             // close modal
@@ -570,7 +570,7 @@ $(document).ready(function () {
         if (!confirm('Delete this loan entry?')) return;
 
         $.ajax({
-            url: window.routes.loanLedgerDestroy.replace(':id', id),
+            url: withCycle(window.routes.loanLedgerDestroy.replace(':id', id)),
             method: 'DELETE',
             data: { _token: $('meta[name="csrf-token"]').attr('content') }
         }).done(() => loadLoanLedger(sheetId, () => loadCustomerSheetData(sheetId)))
@@ -619,7 +619,7 @@ $(document).ready(function () {
         fd.append('type', ['invoice', 'receipt', 'note'].includes(typeVal) ? typeVal : 'other');
 
         $.ajax({
-            url: `/customer-sheet/${entryId}/attachments`,
+            url: withCycle(`/customer-sheet/${entryId}/attachments`),
             method: 'POST',
             data: fd,
             processData: false,
@@ -649,7 +649,7 @@ $(document).ready(function () {
     // Bind once
     $(document).off('click', '[id^="downloadAllBtn-"]').on('click', '[id^="downloadAllBtn-"]', function () {
         if (!currentEntryId) return;
-        window.location = `/customer-sheet/${currentEntryId}/attachments/download-all`;
+        window.location = withCycle(`/customer-sheet/${currentEntryId}/attachments/download-all`);
     });
 
     // Close viewer (per-sheet)
@@ -667,7 +667,7 @@ $(document).ready(function () {
         if (!confirm('Delete this attachment?')) return;
 
         $.ajax({
-            url: `/customer-sheet/attachments/${id}`,
+            url: withCycle(`/customer-sheet/attachments/${id}`),
             method: 'DELETE',
             success: function () {
                 // read entry id from the upload modal of this sheet (it stores the last used one)
@@ -703,12 +703,8 @@ $(document).ready(function () {
                 const rowId = $detail.data('id');
                 const $header = $(`.customer-header-row[data-id="${rowId}"]`);
 
-                // live recompute “Total Shipping Cost”
-                const n = v => parseFloat(String(v).replace(/[^\d.-]/g, '')) || 0;
-                const total = n($detail.find('.dgd-input').val())
-                    + n($detail.find('.labour-input').val())
-                    + n($detail.find('.shipping-input').val());
-                $detail.find('.total-shipping-cost').text(total.toFixed(2));
+                // single source of truth (handles fallbacks + AED formatting)
+                recomputeShipping($detail, $header);
 
                 setSaveState($header, isRowDirty($detail));
             });
@@ -741,19 +737,19 @@ $(document).ready(function () {
         $(this).closest('form').find('.file-name-display').val(names);
     });
 
-    // react to a newly-created customer sheet (emitted by Summary create modal code) ---
-    $(document).on('customerSheet:created', function (_e, payload) {
-        // Supports either {id, name} or {data: {id, sheet_name}}
-        const id = payload?.id ?? payload?.data?.id;
-        const name = payload?.name ?? payload?.sheet_name ?? payload?.data?.sheet_name;
-        if (!id || !name) return;
-        addCustomerSheetUI({ id, name });
-    });
-
+    // react to a newly-created customer sheet
+    $(document)
+        .off('customerSheet:created.cust')
+        .on('customerSheet:created.cust', function (_e, payload) {
+            const id   = payload?.id ?? payload?.data?.id;
+            const name = payload?.name ?? payload?.sheet_name ?? payload?.data?.sheet_name;
+            if (!id || !name) return;
+            addCustomerSheetUI({ id, name });
+        });
 });
 
 function refreshAttachmentCount(entryId, sheetId) {
-    $.getJSON(`/customer-sheet/${entryId}/attachments`, function (res) {
+    $.getJSON(withCycle(`/customer-sheet/${entryId}/attachments`), function (res) {
         const n = (res.attachments || []).length;
         $(`#att-count-${sheetId}-${entryId}`).text(n);
     });
@@ -791,7 +787,7 @@ function openViewer(entryId, sheetId) {
 }
 
 function loadAttachments(entryId, sheetId) {
-    $.getJSON(`/customer-sheet/${entryId}/attachments`, function (res) {
+    $.getJSON(withCycle(`/customer-sheet/${entryId}/attachments`), function (res) {
         const $box = $(`#attachmentsList-${sheetId}`).empty();
         const $dl = $(`#downloadAllBtn-${sheetId}`);
 
@@ -840,81 +836,82 @@ function loadAttachments(entryId, sheetId) {
     });
 }
 
+function recomputeShipping($detailRow, $headerRow) {
+  const n = v => Number(String(v ?? '').replace(/[^\d.-]/g, '')) || 0;
+
+  const dgd    = n($detailRow.find('.dgd-input').val()      || $detailRow.find('.dgd-value').text());
+  const labour = n($detailRow.find('.labour-input').val()   || $detailRow.find('.labour-value').text());
+  const ship   = n($detailRow.find('.shipping-input').val() || $detailRow.find('.shipping-cost-value').text());
+
+  const tot = +(dgd + labour + ship).toFixed(2);
+
+  // reflect to UI
+  $detailRow.find('.shipping-cost-value').text(aed(ship));
+  $detailRow.find('.dgd-value').text(aed(dgd));
+  $detailRow.find('.labour-value').text(aed(labour));
+  $detailRow.find('.total-shipping-cost').text(aed(tot));
+  $headerRow.find('.header-total-shipping').text(aed(tot));
+
+  // keep top cards in sync
+  const sid = Number($headerRow.data('sheet-id') || $detailRow.data('sheet-id'));
+  if (sid && typeof recalcSheetCards === 'function') recalcSheetCards(sid);
+
+  return tot;
+}
+
 function bindLiveCalculation($detailRow, $headerRow) {
-    $detailRow.off('input.calc').on('input', '.item-row input, .dgd-input, .labour-input, .shipping-input', function () {
-        let totalMaterialNoVAT = 0;
-        let totalMaterialBuy = 0;
-        let totalVAT = 0;
-        let totalWeight = 0;
-        let totalUnits = 0;
+  $detailRow.off('input.calc')
+    .on('input.calc', '.item-row input, .dgd-input, .labour-input, .shipping-input', function () {
+      // ---------- ITEMS ----------
+      let totalMaterialNoVAT = 0;
+      let totalMaterialBuy   = 0;
+      let totalVAT           = 0;
+      let totalWeight        = 0;
+      let totalUnits         = 0;
 
-        const dgd = parseFloat($detailRow.find('.dgd-input').val()) || 0;
-        const labour = parseFloat($detailRow.find('.labour-input').val()) || 0;
-        const shipping = parseFloat($detailRow.find('.shipping-input').val()) || 0;
-        const totalShippingCost = dgd + labour + shipping;
+      $detailRow.find('.item-row').each(function () {
+        const $r = $(this);
+        const units      = num($r.find('[data-field="units"]').val());
+        const unitPrice  = num($r.find('[data-field="unitPrice"]').val());
+        const vatRaw     = $r.find('[data-field="vat"]').val();
+        const vatVal     = (vatRaw !== "" && !isNaN(parseFloat(vatRaw))) ? num(vatRaw) : 0;
+        const weightPerC = num($r.find('[data-field="weightPerCtn"]').val());
+        const ctns       = num($r.find('[data-field="ctns"]').val());
 
-        const items = [];
+        const materialNoVAT = units * unitPrice;
+        const materialBuy   = vatVal > 0 ? (materialNoVAT * vatVal) : materialNoVAT;
+        const weight        = weightPerC * ctns;
 
-        $detailRow.find('.item-row').each(function () {
-            const $row = $(this);
+        totalMaterialNoVAT += materialNoVAT;
+        totalMaterialBuy   += materialBuy;
+        totalVAT           += vatVal;
+        totalUnits         += units;
+        totalWeight        += weight;
 
-            const units = parseFloat($row.find('[data-field="units"]').val()) || 0;
-            const unitPrice = parseFloat($row.find('[data-field="unitPrice"]').val()) || 0;
-            const vatRaw = $row.find('[data-field="vat"]').val();
-            const vatValue = (vatRaw !== "" && !isNaN(parseFloat(vatRaw))) ? parseFloat(vatRaw) : 0;
+        $r.find('.total-material').text(fmt(materialBuy));
+        $r.find('.total-weight').text(weight > 0 ? fmt(weight) : '');
+      });
 
-            const weightPerCtn = parseFloat($row.find('[data-field="weightPerCtn"]').val()) || 0;
-            const ctns = parseFloat($row.find('[data-field="ctns"]').val()) || 0;
+      // ---------- SUMMARY ----------
+      $detailRow.find('.total-material-without-vat').text(aed(totalMaterialNoVAT));
+      $detailRow.find('.total-material-buy').text(aed(totalMaterialBuy));
+      $detailRow.find('.total-vat').text(aed(totalVAT));
+      $detailRow.find('.total-weight-kg').text(fmt(totalWeight));
+      $detailRow.find('.total-units').text(fmt0(totalUnits));
 
-            const materialWithoutVAT = units * unitPrice;
-            const materialBuy = vatValue > 0
-                ? materialWithoutVAT * vatValue
-                : materialWithoutVAT;
-            const weight = weightPerCtn * ctns;
+      // ---------- COSTS (centralized) ----------
+      recomputeShipping($detailRow, $headerRow);
 
-            totalMaterialNoVAT += materialWithoutVAT;
-            totalMaterialBuy += materialBuy;
-            totalVAT += vatValue;
-            totalUnits += units;
-            totalWeight += weight;
+      // header material cell
+      $headerRow.find('.header-total-material').text(aed(totalMaterialBuy));
 
-            items.push({
-                units: units,
-                unit_price: unitPrice,
-                vat: vatValue,
-                ctns: ctns,
-                weight_per_ctn: weightPerCtn,
-                total_weight: weight,
-                material_description: $row.find('[data-field="materialDescription"]').val() || ''
-            });
-
-            $row.find('.total-material').text(materialBuy.toFixed(2));
-            $row.find('.total-weight').text(weight > 0 ? weight.toFixed(2) : '');
-        });
-
-        // Update summary footer
-        $detailRow.find('.total-material-without-vat').text(aed(totalMaterialNoVAT));
-        $detailRow.find('.total-material-buy').text(aed(totalMaterialBuy));
-        $detailRow.find('.total-vat').text(aed(totalVAT));
-        $detailRow.find('.total-weight-kg').text(fmt(totalWeight));
-        $detailRow.find('.total-units').text(fmt0(totalUnits));
-
-        $detailRow.find('.shipping-cost-value').text(aed(shipping));
-        $detailRow.find('.dgd-value').text(aed(dgd));
-        $detailRow.find('.labour-value').text(aed(labour));
-        $detailRow.find('.total-shipping-cost').text(aed(totalShippingCost));
-
-        $headerRow.find('.header-total-material').text(aed(totalMaterialBuy));
-        $headerRow.find('.header-total-shipping').text(aed(totalShippingCost));
-
-        const sid = Number($headerRow.data('sheet-id') || $detailRow.data('sheet-id'));
-        if (sid && typeof recalcSheetCards === 'function') recalcSheetCards(sid);
-        if (typeof isRowDirty === 'function') setSaveState($headerRow, isRowDirty($detailRow));
+      // save-state only (cards were updated by recomputeShipping)
+      if (typeof isRowDirty === 'function') setSaveState($headerRow, isRowDirty($detailRow));
     });
 }
 
 function loadCustomerSheet(sheetId) {
-    $.get(`/customer-sheet/load/${sheetId}`, function (entries) {
+    $.get(withCycle(`/customer-sheet/load/${sheetId}`), function (entries) {
         const $tbody = $('#customerTableBody');
         $tbody.empty();
 
@@ -1039,7 +1036,7 @@ function loadCustomerSheetData(sheetId) {
     if (isRendering) return;
     isRendering = true;
 
-    $.get(`/customer-sheet/load/${sheetId}`)
+    $.get(withCycle(`/customer-sheet/load/${sheetId}`))
         .done(res => {
             if (res.status === 'success') {
                 renderCustomerSheetRows(sheetId, res.data || []);
@@ -1172,10 +1169,10 @@ function renderCustomerSheetRows(sheetId, entries) {
                 <td class="border p-2">${entry.description || ''}</td>
                 <td class="border p-2 header-total-material">${aed(entry.total_material_buy)}</td>
                 <td class="border p-2 header-total-shipping">${aed(
-                        num(entry.total_shipping_cost) ||
-                        (num(entry.shipping_cost) + num(entry.dgd) + num(entry.labour))
-                    )
-                }</td>
+            num(entry.total_shipping_cost) ||
+            (num(entry.shipping_cost) + num(entry.dgd) + num(entry.labour))
+        )
+            }</td>
                 ${actionCell}
             </tr>
         `);
@@ -1302,10 +1299,6 @@ function renderCustomerSheetRows(sheetId, entries) {
             .prop('readonly', false)
             .each(function () { $(this).data('orig', $(this).val() || ''); });
 
-        // ADD THIS: seed originals for cost inputs
-        $detailRow.find('.dgd-input, .labour-input, .shipping-input')
-            .each(function () { $(this).data('orig', $(this).val() || '0'); });
-
         // Convert item table cells to inputs immediately (if not already)
         $detailRow.find('tr.item-row').each(function () {
             const $row = $(this);
@@ -1337,14 +1330,16 @@ function renderCustomerSheetRows(sheetId, entries) {
         });
 
         tbody.append($headerRow).append($detailRow);
+        
+        // seed originals for cost inputs (you already do this above; keep it)
+        $detailRow.find('.dgd-input, .labour-input, .shipping-input')
+        .each(function () { $(this).data('orig', $(this).val() || '0'); });
+        
+        recomputeShipping($detailRow, $headerRow);
 
         refreshAttachmentCount(entry.id, entry.customer_sheet_id);
 
         initAlwaysEditable($detailRow, $headerRow);
-
-        $headerRow.on('click', () => {
-            $detailRow.toggleClass('hidden');
-        });
     });
 
     // set this sheet's top totals
@@ -1455,7 +1450,7 @@ function loadLoanLedger(sheetId, after) {
     const tpl = (window.routes && window.routes.loanLedgerIndex)
         || '/customer-sheet/:sheetId/loan-ledger';
 
-    $.get(loanRoute(tpl, { sheetId }))
+    $.get(withCycle(loanRoute(tpl, { sheetId })))
         .done(res => {
             renderLoanLedgerRows(res.data || [], sheetId);
             if (typeof updateLoanLedgerTotals === 'function') {
@@ -1485,7 +1480,7 @@ function updateLoanLedgerTotals(sheetId, sheetName) {
     const remaining = loanPaid - sheetTotal;
 
     $(`#totalLoanPaid-${sheetId}`).text(aed(loanPaid));
-    $(`#sheetTotalAmount-${sheetId}`).text(aed(sheetTotal));
+    $(`#sheetTotal-${sheetId}`).text(aed(sheetTotal));
     $(`#remainingBalance-${sheetId}`).text(aed(remaining));
 }
 
@@ -1602,38 +1597,41 @@ function slugifyCustomerName(s) {
  * Call with: addCustomerSheetUI({ id, name });
  */
 function addCustomerSheetUI({ id, name }) {
-    if (!id || !name) return;
+  if (!id || !name) return;
 
-    const slug = slugifyCustomerName(name);
-    const key = `customer-${slug}`;          // data-sheet, used by the tab click handler in sheet.js
-    const secId = `sheet-customer-${slug}`;    // DOM id for the section container
+  const slug = slugifyCustomerName(name);
+  const key  = `customer-${slug}`;            // used by .sheet-tab click handler
+  const secId = `sheet-customer-${slug}`;     // container id for section
 
-    // 1) Add a tab button at the bottom (you already have this container)
+  // --- De-dupe guards ---
+  // Already have a tab for this DB id?
+  if ($(`#customerTabsContainer .sheet-tab[data-sheet-id="${id}"]`).length) {
+    // ensure section exists; if not, we still fetch below
+  } else if ($(`#customerTabsContainer .sheet-tab[data-sheet="${key}"]`).length) {
+    // already have a tab for this slug/name; don't add another
+  } else {
+    // Add the tab exactly once
     $('#customerTabsContainer').append(
-        `<button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100"
-             data-sheet="${key}" data-sheet-id="${id}">
-       ${name}
-     </button>`
+      `<button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100"
+               data-sheet="${key}" data-sheet-id="${id}">
+         ${name}
+       </button>`
     );
+  }
 
-    // 2) Fetch rendered section HTML (controller method: section())
-    $.get(`customer-sheet/section/${id}`)
-        .done(function (html) {
-            // Remove any previous node with same id (defensive)
-            $('#' + secId).remove();
+  // Fetch the section HTML and inject (idempotent)
+  $.get(withCycle(`customer-sheet/section/${id}`))
+    .done(function (html) {
+      // remove any stale node with the same id, then insert fresh
+      $('#' + secId).remove();
+      const $node = $(html);
+      if (!$node.attr('id')) $node.attr('id', secId);
+      $node.addClass('sheet-section hidden');
+      $('#sheetContainer').append($node);
 
-            const $node = $(html);
-            // ensure it has a stable id and the sheet-section class
-            if (!$node.attr('id')) $node.attr('id', secId);
-            $node.addClass('sheet-section hidden');
-
-            // Inject into the main container where your sections live
-            $('#sheetContainer').append($node);
-
-            // 3) Switch to the new tab to let your existing .sheet-tab handler
-            // set the header and kick off loaders (loadCustomerSheetData, loadLoanLedger)
-            $(`.sheet-tab[data-sheet="${key}"]`).trigger('click');
-        });
+      // switch to the tab; the global handler will persist active sheet
+      $(`.sheet-tab[data-sheet="${key}"]`).trigger('click');
+    });
 }
 
 // Optional: expose to other scripts (summary page can call it directly)

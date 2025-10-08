@@ -11,27 +11,43 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use App\Support\ActiveCycle;
+use Illuminate\Validation\Rule;
 
 class CustomerSheetController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
-        $customerSheets = CustomerSheet::with('entries')->get();
+        $cid = ActiveCycle::id($request);
+
+        $customerSheets = CustomerSheet::query()
+            ->where('cycle_id', $cid)
+            ->orderBy('sheet_name')
+            ->get();
 
         return view('index', [
-            'customerSheets' => $customerSheets,  // <- matches index.blade.php
-            'activeSheet' => session('activeSheet') ?? 'summary'
+            'customerSheets' => $customerSheets,
+            'activeSheet'    => session('activeSheet') ?? 'summary',
         ]);
     }
 
     public function create(Request $request)
     {
+        $cid = ActiveCycle::id($request);
+
         $request->validate([
-            'sheet_name' => 'required|string|max:255|unique:customer_sheets,sheet_name'
+            'sheet_name' => [
+                'required',
+                'string',
+                'max:255',
+                Rule::unique('customer_sheets', 'sheet_name')
+                    ->where(fn($q) => $q->where('cycle_id', $cid)),
+            ],
         ]);
 
         $sheet = CustomerSheet::create([
-            'sheet_name' => $request->sheet_name
+            'cycle_id'   => $cid,
+            'sheet_name' => strtoupper(trim($request->sheet_name)),
         ]);
 
         return response()->json(['success' => true, 'id' => $sheet->id]);
@@ -39,64 +55,73 @@ class CustomerSheetController extends Controller
 
     public function storeSheetName(Request $request)
     {
-        Log::info('storeSheetName hit', $request->all());
-        try {
-            $data = $request->validate([
-                'sheet_name' => 'required|string|max:255',
-            ]);
+        $cid = ActiveCycle::id($request);
 
-            $name = strtoupper(trim($data['sheet_name']));
+        $data = $request->validate([
+            'sheet_name' => [
+                'required',
+                'string',
+                'max:255',
+                Rule::unique('customer_sheets', 'sheet_name')
+                    ->where(fn($q) => $q->where('cycle_id', $cid)),
+            ],
+        ]);
 
-            // Case-insensitive uniqueness
-            $exists = CustomerSheet::whereRaw('LOWER(sheet_name) = ?', [strtolower($name)])->exists();
-            if ($exists) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Sheet name already exists.'
-                ], 422);
-            }
+        $sheet = CustomerSheet::create([
+            'cycle_id'   => $cid,
+            'sheet_name' => strtoupper(trim($data['sheet_name'])),
+        ]);
 
-            $sheet = CustomerSheet::create(['sheet_name' => $name]);
-
-            Log::info('Created customer sheet', ['id' => $sheet->id, 'name' => $sheet->sheet_name]);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Customer sheet created successfully',
-                'data' => [
-                    'id'         => $sheet->id,
-                    'sheet_name' => $sheet->sheet_name,
-                    'slug'       => Str::slug($sheet->sheet_name),
-                ],
-            ], 201);
-        } catch (\Throwable $e) {
-            Log::error('storeSheetName failed', [
-                'error'   => $e->getMessage(),
-                'trace'   => $e->getTraceAsString(),
-                'payload' => $request->all(),
-            ]);
-            return response()->json(['success' => false, 'message' => 'Server error creating sheet.'], 500);
-        }
+        return response()->json([
+            'success' => true,
+            'message' => 'Customer sheet created successfully',
+            'data'    => ['id' => $sheet->id, 'sheet_name' => $sheet->sheet_name],
+        ], 201);
     }
 
     public function addEntry(Request $request)
     {
+        $cid = ActiveCycle::id($request);
+
         $request->validate([
-            'sheet_id' => 'required|exists:customer_sheets,id',
-            'date' => 'required|date',
-            'supplier_name' => 'required|string|max:255',
-            'description' => 'nullable|string',
-            'total_material' => 'nullable|numeric',
-            'total_shipping' => 'nullable|numeric',
+            'sheet_id'        => 'required|exists:customer_sheets,id',
+            'date'            => 'required|date',
+            'supplier_name'   => 'required|string|max:255',
+            'description'     => 'nullable|string',
+            'total_material'  => 'nullable|numeric',
+            'total_material_buy'       => 'nullable|numeric',
+            'total_shipping'           => 'nullable|numeric',
+            'total_shipping_cost'      => 'nullable|numeric',
+            'shipping_cost'            => 'nullable|numeric',
+            'dgd'                      => 'nullable|numeric',
+            'labour'                   => 'nullable|numeric',
         ]);
 
+        // ensure the target sheet is in this cycle
+        abort_unless(
+            CustomerSheet::where('id', $request->sheet_id)->where('cycle_id', $cid)->exists(),
+            403
+        );
+
+        // normalize aliases
+        $tmBuy = $request->input('total_material_buy',
+                $request->input('total_material', 0));
+
+        $tsCost = $request->input('total_shipping_cost',
+                $request->input('total_shipping',
+                    ($request->input('shipping_cost', 0)
+                    + $request->input('dgd', 0)
+                    + $request->input('labour', 0))
+                ));
+
         CustomerSheetEntry::create([
-            'customer_sheet_id' => $request->sheet_id,
-            'date' => $request->date,
-            'supplier_name' => $request->supplier_name,
-            'description' => $request->description,
-            'total_material' => $request->total_material,
-            'total_shipping_cost' => $request->total_shipping,
+            'cycle_id'            => $cid,
+            'customer_sheet_id'   => $request->sheet_id,
+            'date'                => $request->date,
+            'supplier'            => $request->supplier_name,
+            'description'         => $request->description,
+            'total_material_buy'  => $tmBuy ?? 0,
+            'total_shipping_cost' => $tsCost ?? 0,
         ]);
 
         return response()->json(['success' => true]);
@@ -104,6 +129,8 @@ class CustomerSheetController extends Controller
 
     public function store(Request $request)
     {
+        $cid = ActiveCycle::id($request);
+
         $request->validate([
             'sheet_id' => 'required|exists:customer_sheets,id',
             'date' => 'required|date',
@@ -115,6 +142,11 @@ class CustomerSheetController extends Controller
             'receipt_no' => 'nullable|string',
             'remarks' => 'nullable|string',
         ]);
+
+        abort_unless(
+            CustomerSheet::where('id', $request->sheet_id)->where('cycle_id', $cid)->exists(),
+            403
+        );
 
         // Calculate total_material_buy from items (units * unit_price)
         $totalMaterialBuy = 0.0;
@@ -136,6 +168,7 @@ class CustomerSheetController extends Controller
         }
 
         $entry = CustomerSheetEntry::create([
+            'cycle_id'             => $cid,
             'customer_sheet_id' => $request->sheet_id,
             'date' => $request->date,
             'supplier' => $request->supplier,
@@ -161,6 +194,7 @@ class CustomerSheetController extends Controller
         if ($request->has('items') && is_array($request->items)) {
             foreach ($request->items as $item) {
                 $entry->items()->create([
+                    'cycle_id'       => $cid,
                     'description' => $item['description'] ?? null,
                     'units' => $item['units'] ?? 0,
                     'unit_price' => $item['unit_price'] ?? 0,
@@ -175,89 +209,86 @@ class CustomerSheetController extends Controller
         return response()->json(['message' => 'Saved successfully']);
     }
 
-    public function loadCustomerSheet($sheetId)
+    public function loadCustomerSheet(Request $request, $sheetId)
     {
-        try {
-            $entries = CustomerSheetEntry::query()
-                ->where('customer_sheet_id', $sheetId)
-                ->select([
+        $cid = ActiveCycle::id($request);
+
+        // ensure the sheet is in this cycle
+        $sheet = CustomerSheet::where('id', $sheetId)->where('cycle_id', $cid)->firstOrFail();
+
+        $entries = CustomerSheetEntry::query()
+            ->where('customer_sheet_id', $sheetId)
+            ->where('cycle_id', $cid)
+            ->select([
+                'id',
+                'customer_sheet_id',
+                'date',
+                'supplier',
+                'description',
+                'total_material_without_vat',
+                'total_material_buy',
+                'total_shipping_cost',
+                'total_vat',
+                'total_weight',
+                'total_units',
+                'dgd',
+                'labour',
+                'shipping_cost',
+                'mode_of_transaction',
+                'receipt_no',
+                'remarks',
+            ])
+            // sum weight from items
+            ->withSum('items as items_total_weight', 'total_weight')
+            // include items (use the correct FK column name here)
+            ->with(['items' => function ($q) use ($cid) {
+                $q->select(
                     'id',
-                    'customer_sheet_id',
-                    'date',
-                    'supplier',
+                    'entry_id', // <- if your FK is different, change here and in the relation
                     'description',
-                    'total_material_without_vat',
-                    'total_material_buy',
-                    'total_shipping_cost',
-                    'total_vat',
-                    'total_weight',
-                    'total_units',
-                    'dgd',
-                    'labour',
-                    'shipping_cost',
-                    'mode_of_transaction',
-                    'receipt_no',
-                    'remarks',
-                ])
-                // sum weight from items
-                ->withSum('items as items_total_weight', 'total_weight')
-                // include items (use the correct FK column name here)
-                ->with(['items' => function ($q) {
-                    $q->select(
-                        'id',
-                        'entry_id', // <- if your FK is different, change here and in the relation
-                        'description',
-                        'units',
-                        'unit_price',
-                        'vat',
-                        'ctns',
-                        'weight_per_ctn',
-                        'total_weight'
-                    );
-                }])
-                ->orderBy('id', 'asc')
-                ->get()
-                // ensure date is a plain "YYYY-MM-DD" string for data-* attributes
-                ->map(function ($e) {
-                    $e->date = \Illuminate\Support\Carbon::parse($e->date)->toDateString();
-                    return $e;
-                });
+                    'units',
+                    'unit_price',
+                    'vat',
+                    'ctns',
+                    'weight_per_ctn',
+                    'total_weight'
+                );
+            }])
+            ->orderBy('id', 'asc')
+            ->get()
+            // ensure date is a plain "YYYY-MM-DD" string for data-* attributes
+            ->map(function ($e) {
+                $e->date = \Illuminate\Support\Carbon::parse($e->date)->toDateString();
+                return $e;
+            });
 
-            // 🔹 Totals for this sheet
-            $sumMaterial  = (float) CustomerSheetEntry::where('customer_sheet_id', $sheetId)->sum('total_material_buy');
-            $sumShipping  = (float) CustomerSheetEntry::where('customer_sheet_id', $sheetId)->sum('total_shipping_cost');
-            $sheetTotal   = $sumMaterial + $sumShipping;
+        // Totals for this sheet
+        $sumMaterial  = (float) CustomerSheetEntry::where('customer_sheet_id', $sheetId)->sum('total_material_buy');
+        $sumShipping  = (float) CustomerSheetEntry::where('customer_sheet_id', $sheetId)->sum('total_shipping_cost');
+        $sheetTotal   = $sumMaterial + $sumShipping;
 
-            // 🔹 Loan paid total (if you have the ledger table)
-            $loanPaid     = (float) CustomerLoanLedgerEntry::where('customer_sheet_id', $sheetId)->sum('amount');
+        // Loan paid total (if you have the ledger table)
+        $loanPaid     = (float) CustomerLoanLedgerEntry::where('customer_sheet_id', $sheetId)->sum('amount');
 
-            // 🔹 Remaining balance = Loan Paid - (Material + Shipping)
-            $remaining    = $loanPaid - $sheetTotal;
+        // Remaining balance = Loan Paid - (Material + Shipping)
+        $remaining    = $loanPaid - $sheetTotal;
 
-            return response()->json([
-                'status' => 'success',
-                'data'   => $entries,
-                'totals' => [
-                    'material'           => $sumMaterial,
-                    'shipping'           => $sumShipping,
-                    'sheet_total'        => $sheetTotal,
-                    'loan_paid'          => $loanPaid,
-                    'remaining_balance'  => $remaining,
-                ],
-            ]);
-        } catch (\Throwable $e) {
-            // temporary: make debugging easier
-            Log::error('loadCustomerSheet error', ['e' => $e->getMessage()]);
-            return response()->json([
-                'status'  => 'error',
-                'message' => $e->getMessage(),
-            ], 500);
-        }
+        return response()->json([
+            'status' => 'success',
+            'data'   => $entries,
+            'totals' => [
+                'material'           => $sumMaterial,
+                'shipping'           => $sumShipping,
+                'sheet_total'        => $sheetTotal,
+                'loan_paid'          => $loanPaid,
+                'remaining_balance'  => $remaining,
+            ],
+        ]);
     }
 
     public function update(Request $request)
     {
-        Log::info('UPDATE payload', $request->all());
+        $cid = ActiveCycle::id($request);
 
         $request->validate([
             'id'          => 'required|exists:customer_sheet_entries,id',
@@ -282,7 +313,11 @@ class CustomerSheetController extends Controller
             'total_units'                => 'nullable|numeric',
         ]);
 
-        $entry = \App\Models\CustomerSheetEntry::findOrFail($request->id);
+        $entry = CustomerSheetEntry::findOrFail($request->id);
+        abort_unless($entry->cycle_id === $cid, 403);
+
+        // also ensure the new sheet_id belongs to this cycle
+        abort_unless(CustomerSheet::where('id', $request->sheet_id)->where('cycle_id', $cid)->exists(), 403);
 
         // ---- Recompute from items (source of truth) ----
         $exVatSum   = 0.0; // Total Material w/out VAT
@@ -345,6 +380,7 @@ class CustomerSheetController extends Controller
             $entry->items()->delete();
             foreach ($request->items as $item) {
                 $entry->items()->create([
+                    'cycle_id'       => $cid,
                     'description'    => $item['description'] ?? null,
                     'units'          => $item['units'] ?? 0,
                     'unit_price'     => $item['unit_price'] ?? 0,
@@ -372,21 +408,20 @@ class CustomerSheetController extends Controller
         return response()->json(['message' => 'Sheet updated']);
     }
 
-    public function deleteEntry($id)
+    public function deleteEntry(Request $request, $id)
     {
-        try {
-            $entry = CustomerSheetEntry::with('items')->findOrFail($id);
+        $cid = ActiveCycle::id($request);
 
-            // Delete related items first
-            $entry->items()->delete();
+        $entry = CustomerSheetEntry::with('items')->findOrFail($id);
+        abort_unless($entry->cycle_id === $cid, 403);
 
-            // Then delete the entry itself
-            $entry->delete();
+        // Delete related items first
+        $entry->items()->delete();
 
-            return response()->json(['status' => 'success']);
-        } catch (\Exception $e) {
-            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
-        }
+        // Then delete the entry itself
+        $entry->delete();
+
+        return response()->json(['status' => 'success']);
     }
 
     public function section(CustomerSheet $sheet)

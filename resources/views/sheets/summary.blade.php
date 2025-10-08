@@ -1,5 +1,5 @@
 <div id="summary-root"
-    data-totals-url="{{ route('gts.totals', ['only_posted' => 1]) }}" class="max-w-7xl mx-auto px-4 py-6">
+    data-totals-url="{{ isset($cycle) ? '' : route('gts.totals', ['only_posted' => 1]) }}" class="max-w-7xl mx-auto px-4 py-6">
     <!-- Header -->
     <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-6">
         <h2 class="text-2xl font-bold tracking-tight">Summary Overview</h2>
@@ -79,7 +79,6 @@
                     <div class="text-xs uppercase tracking-wider text-gray-500 mb-1">Total Shipping Cost</div>
                     <div id="totalShippingCost" class="text-xl font-bold text-gray-900">Loading…</div>
                 </div>
-                <!-- Total Investment Amount -->
                 <div class="rounded-xl border border-gray-100 p-4 text-center">
                     <div class="text-xs uppercase tracking-wider text-gray-500 mb-1">Total Investment Amount</div>
                     <div id="totalInvestmentAmount-investment" class="text-xl font-bold text-gray-900">Loading…</div>

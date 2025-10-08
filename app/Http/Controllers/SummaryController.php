@@ -5,143 +5,162 @@ namespace App\Http\Controllers;
 use Illuminate\Support\Facades\DB;
 use App\Models\CustomerSheet;
 use App\Models\CustomerSheetEntry;
+use App\Models\Cycle;
 use App\Models\Local;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Schema;
-
+use App\Support\ActiveCycle;
 use Illuminate\Http\Request;
+use App\Models\CycleMetric;
+use Illuminate\Support\Facades\Log;
 
 class SummaryController extends Controller
 {
     public function summary()
     {
-        return view('sheets.summary_sheet');
+        return redirect()->route('index');
     }
 
-    public function getSummaryData(Request $request)
+    public function getSummaryData(Request $request, ?Cycle $cycle = null)
     {
-        // If you want to mirror "posted only", turn this on via ?only_posted=1
-        $onlyPosted = $request->boolean('only_posted', false);
+        $cid = $cycle?->id ?? \App\Support\ActiveCycle::id($request);
 
-        // Base filter that matches your Materials table
-        $base = DB::table('gts_materials as m');
-        if ($onlyPosted && Schema::hasColumn('gts_materials', 'status')) {
-            $base->where('m.status', true);
-        }
-        if (Schema::hasColumn('gts_materials', 'deleted_at')) {
-            $base->whereNull('m.deleted_at');
-        }
-        if ($request->filled('from')) {
-            $base->whereDate('m.invoice_date', '>=', $request->input('from'));
-        }
-        if ($request->filled('to')) {
-            $base->whereDate('m.invoice_date', '<=', $request->input('to'));
-        }
-
-        // Resolve IDs once so we can safely aggregate without join blow-ups
-        $ids = (clone $base)->pluck('m.id');
-        if ($ids->isEmpty()) {
-            return response()->json([
-                'total_purchase_of_material' => 0.00,
-                'total_shipping_cost'        => 0.00,
-                'cash_out'                   => 0.00,
-                'cash_in'                    => 0.00,
-                'profit'                     => 0.00,
-            ])->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
-        }
-
-        // MATERIAL — exactly like the "Total Material" column in the grid:
-        // sum of (units * unit_price + vat) over gts_materials_items
-        $material = (float) DB::table('gts_materials_items as i')
-            ->whereIn('i.material_id', $ids)
-            ->selectRaw('ROUND(SUM(COALESCE(i.units,0)*COALESCE(i.unit_price,0) + COALESCE(i.vat,0)), 2) as s')
-            ->value('s');
-
-        // SHIPPING — prefer persisted total_shipping_cost if the column exists
-        $shippingSql = Schema::hasColumn('gts_materials', 'total_shipping_cost')
-            ? 'ROUND(SUM(COALESCE(m.total_shipping_cost, COALESCE(m.shipping_cost,0)+COALESCE(m.dgd,0)+COALESCE(m.labour,0))), 2) as s'
-            : 'ROUND(SUM(COALESCE(m.shipping_cost,0)+COALESCE(m.dgd,0)+COALESCE(m.labour,0)), 2) as s';
+        // --- Cash OUT parts (Material & Shipping) exactly as before
+        $material = (float) DB::table('gts_materials as m')
+            ->where('m.cycle_id', $cid)
+            ->when(Schema::hasColumn('gts_materials', 'deleted_at'), fn($q) => $q->whereNull('m.deleted_at'))
+            ->selectRaw("
+            ROUND(SUM(
+                CASE
+                    WHEN COALESCE(m.total_material_card,0) > 0 THEN COALESCE(m.total_material_card,0)
+                    WHEN COALESCE(m.total_material_buy, 0) > 0 THEN COALESCE(m.total_material_buy, 0)
+                    WHEN COALESCE(m.total_material,     0) > 0 THEN COALESCE(m.total_material,     0)
+                    ELSE 0
+                END
+            ), 2) as s
+        ")
+            ->value('s') ?? 0.0;
 
         $shipping = (float) DB::table('gts_materials as m')
-            ->whereIn('m.id', $ids)
-            ->selectRaw($shippingSql)
-            ->value('s');
+            ->where('m.cycle_id', $cid)
+            ->when(Schema::hasColumn('gts_materials', 'deleted_at'), fn($q) => $q->whereNull('m.deleted_at'))
+            ->selectRaw('
+            ROUND(SUM(
+                COALESCE(
+                    m.total_shipping_cost,
+                    COALESCE(m.shipping_cost,0) + COALESCE(m.dgd,0) + COALESCE(m.labour,0)
+                )
+            ), 2) as s
+        ')
+            ->value('s') ?? 0.0;
 
+        // --- Cash IN parts (must match the "Cash In Breakdown" grand total)
+        $usTotal = (float) DB::table('us_clients')->where('cycle_id', $cid)->sum('amount');
+        $sqTotal = (float) DB::table('s_q_clients')->where('cycle_id', $cid)->sum('amount');
+
+        // Local Sales total using your helper
+        $localTotal = $this->computeLocalSalesTotal($cid);
+
+        // Customer sheets totals = BL + RH … (material + shipping)
+        $cust = DB::table('customer_sheet_entries')
+            ->where('cycle_id', $cid)
+            ->selectRaw('
+            COALESCE(SUM(COALESCE(total_material_buy,0)), 0) AS material,
+            COALESCE(SUM(COALESCE(total_shipping_cost,
+                   COALESCE(shipping_cost,0)+COALESCE(dgd,0)+COALESCE(labour,0))), 0) AS shipping
+        ')
+            ->first();
+
+        $custMat  = (float) ($cust->material ?? 0);
+        $custShip = (float) ($cust->shipping ?? 0);
+        $custTotal = $custMat + $custShip;
+
+        // Final KPI numbers (exactly what Summary shows)
+        $cashIn  = round($usTotal + $sqTotal + $localTotal + $custTotal, 2);
         $cashOut = round($material + $shipping, 2);
+        $profit  = round($cashIn - $cashOut, 2);
+
+        // OPTIONAL: expose a small structure the Summary page can use to build the table, if you want
+        $cashInBreakdown = [
+            ['sheet' => 'BL/RH (Customer Sheets)', 'total' => round($custTotal, 2)],
+            ['sheet' => 'US Client Payment',        'total' => round($usTotal, 2)],
+            ['sheet' => 'SQ Sheet',                 'total' => round($sqTotal, 2)],
+            ['sheet' => 'Local Sales',              'total' => round($localTotal, 2)],
+        ];
+
+        // --- SNAPSHOT: write to cycle_metrics so /cycles can read it
+        \App\Models\CycleMetric::updateOrCreate(
+            ['cycle_id' => $cid],
+            [
+                'cash_in'     => $cashIn,
+                'cash_out'    => $cashOut,
+                'profit'      => $profit,
+                'us_total'    => round($usTotal, 2),
+                'computed_at' => now(),
+            ]
+        );
 
         return response()->json([
-            'total_purchase_of_material' => $material,
-            'total_shipping_cost'        => $shipping,
+            'total_purchase_of_material' => round($material, 2),
+            'total_shipping_cost'        => round($shipping, 2),
             'cash_out'                   => $cashOut,
-            'cash_in'                    => 0,
-            'profit'                     => 0 - $cashOut,
+            'cash_in'                    => $cashIn,
+            'profit'                     => $profit,
+            'cash_in_breakdown'          => $cashInBreakdown, // helps if you need it
         ])->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
     }
 
-    public function getCashInBreakdown()
+    public function getCashInBreakdown(Request $request)
     {
-        $sheets = [
-            ['name' => 'RH Sheet', 'table' => 'r_h_clients'],
-            ['name' => 'FF Sheet', 'table' => 'f_f_clients'],
-            ['name' => 'BL Sheet', 'table' => 'b_l_clients'],
-            ['name' => 'WS Sheet', 'table' => 'w_s_clients'],
-        ];
+        $cid = ActiveCycle::id($request);
 
-        $data = [];
+        $us  = (float) DB::table('us_clients')->where('cycle_id', $cid)->sum('amount');
+        $sq  = (float) DB::table('s_q_clients')->where('cycle_id', $cid)->sum('amount');
+        $loc = $this->computeLocalSalesTotal($cid);
 
-        foreach ($sheets as $sheet) {
-            try {
-                $totals = DB::table($sheet['table'])
-                    ->selectRaw(
-                        'COALESCE(SUM(total_material),0) AS material, '
-                        . 'COALESCE(SUM(shipping_cost),0) AS shipping'
-                    )
-                    ->first();
-
-                $material = (float) ($totals->material ?? 0);
-                $shipping = (float) ($totals->shipping ?? 0);
-
-                $data[] = [
-                    'sheet' => $sheet['name'],
-                    'material' => $material,
-                    'shipping' => $shipping,
-                    'total'    => $material + $shipping,
-                ];
-            } catch (\Throwable $e) {
-                $data[] = [
-                    'sheet' => $sheet['name'],
-                    'material' => 0,
-                    'shipping' => 0,
-                    'total' => 0,
-                    'error' => $e->getMessage(),
-                ];
-            }
-        }
-
-        // Add 3 direct total-based sheets
-        $usClientAmount = DB::table('us_clients')->sum('amount');
-        $sqClientAmount = DB::table('s_q_clients')->sum('amount');
-        $localSalesAmount = $this->computeLocalSalesTotal();
-
-        $data[] = ['sheet' => 'US Client Payment', 'material' => $usClientAmount, 'shipping' => 0, 'total' => $usClientAmount];
-        $data[] = ['sheet' => 'SQ Sheet', 'material' => $sqClientAmount, 'shipping' => 0, 'total' => $sqClientAmount];
-        $data[] = ['sheet' => 'Local Sales', 'material' => $localSalesAmount, 'shipping' => 0, 'total' => $localSalesAmount];
-
-        return response()->json($data);
-    }
-
-    public function customerSheetTotals(): JsonResponse
-    {
-        $tot = DB::table('customer_sheet_entries')
+        $customerRows = DB::table('customer_sheets as cs')
+            ->where('cs.cycle_id', $cid)
+            ->leftJoin('customer_sheet_entries as e', 'e.customer_sheet_id', '=', 'cs.id')
             ->selectRaw('
-            COALESCE(SUM(COALESCE(total_material_buy,0)), 0) AS material,
+            cs.sheet_name AS name,
+            COALESCE(SUM(COALESCE(e.total_material_buy,0)), 0) AS material,
             COALESCE(
                 SUM(
-                    COALESCE(total_shipping_cost,
-                             COALESCE(shipping_cost,0) + COALESCE(dgd,0) + COALESCE(labour,0))
+                    COALESCE(e.total_shipping_cost,
+                             COALESCE(e.shipping_cost,0)+COALESCE(e.dgd,0)+COALESCE(e.labour,0))
                 ), 0
             ) AS shipping
         ')
+            ->groupBy('cs.id', 'cs.sheet_name')
+            ->orderBy('cs.sheet_name')
+            ->get()
+            ->map(fn($r) => [
+                'sheet'    => (string) $r->name,
+                'material' => (float) $r->material,
+                'shipping' => (float) $r->shipping,
+                'total'    => (float) $r->material + (float) $r->shipping,
+            ])
+            ->values()
+            ->all();
+
+        $otherRows = [
+            ['sheet' => 'US Client Payment', 'material' => $us, 'shipping' => 0.0, 'total' => $us],
+            ['sheet' => 'SQ Sheet',          'material' => $sq, 'shipping' => 0.0, 'total' => $sq],
+            ['sheet' => 'Local Sales',       'material' => $loc, 'shipping' => 0.0, 'total' => $loc],
+        ];
+
+        return response()->json(array_merge($customerRows, $otherRows));
+    }
+
+    public function customerSheetTotals(Request $request): JsonResponse
+    {
+        $cid = ActiveCycle::id($request);
+        $tot = DB::table('customer_sheet_entries')
+            ->where('cycle_id', $cid)
+            ->selectRaw('
+                COALESCE(SUM(COALESCE(total_material_buy,0)), 0) AS material,
+                COALESCE(SUM(COALESCE(total_shipping_cost,
+                    COALESCE(shipping_cost,0)+COALESCE(dgd,0)+COALESCE(labour,0))), 0) AS shipping')
             ->first();
 
         return response()->json([
@@ -150,8 +169,10 @@ class SummaryController extends Controller
         ]);
     }
 
-    public function customerSheetRows(): JsonResponse
+    public function customerSheetRows(Request $request): JsonResponse
     {
+        $cid = ActiveCycle::id($request);
+
         // Decide FK once
         $fk = Schema::hasColumn('customer_sheet_entries', 'customer_sheet_id')
             ? 'customer_sheet_id'
@@ -159,7 +180,8 @@ class SummaryController extends Controller
 
         // If entries table missing (or no FK), return all sheets with zeros
         if (!Schema::hasTable('customer_sheet_entries') || !$fk) {
-            $rows = CustomerSheet::query()
+            $rows = DB::table('customer_sheets')
+                ->where('cycle_id', $cid)
                 ->orderBy('sheet_name')
                 ->get(['sheet_name'])
                 ->map(fn($s) => [
@@ -172,6 +194,7 @@ class SummaryController extends Controller
         }
 
         $rows = DB::table('customer_sheets as cs')
+            ->where('cs.cycle_id', $cid)
             ->leftJoin('customer_sheet_entries as e', "e.$fk", '=', 'cs.id')
             ->selectRaw('
             cs.sheet_name AS name,
@@ -196,33 +219,42 @@ class SummaryController extends Controller
         return response()->json(['rows' => $rows], 200);
     }
 
-    public function customerSheetLoans(): JsonResponse
+    public function customerSheetLoans(Request $request): JsonResponse
     {
+        $cid = ActiveCycle::id($request);
+
         $rows = DB::table('customer_sheets as cs')
+            ->where('cs.cycle_id', $cid)
             ->leftJoin(DB::raw('
-            (SELECT customer_sheet_id,
+            (SELECT customer_sheet_id, cycle_id,
                     SUM(COALESCE(total_material_buy,0) + COALESCE(total_shipping_cost,0)) AS sheet_total
              FROM customer_sheet_entries
-             GROUP BY customer_sheet_id) e
-        '), 'e.customer_sheet_id', '=', 'cs.id')
+             GROUP BY customer_sheet_id, cycle_id) e
+        '), function ($join) {
+                $join->on('e.customer_sheet_id', '=', 'cs.id')
+                    ->on('e.cycle_id', '=', 'cs.cycle_id');           // keep cycle consistent
+            })
             ->leftJoin(DB::raw('
-            (SELECT customer_sheet_id,
+            (SELECT customer_sheet_id, cycle_id,
                     SUM(COALESCE(amount,0)) AS loan_paid
              FROM customer_loan_ledger_entries
-             GROUP BY customer_sheet_id) ll
-        '), 'll.customer_sheet_id', '=', 'cs.id')
+             GROUP BY customer_sheet_id, cycle_id) ll
+        '), function ($join) {
+                $join->on('ll.customer_sheet_id', '=', 'cs.id')
+                    ->on('ll.cycle_id', '=', 'cs.cycle_id');          // keep cycle consistent
+            })
             ->selectRaw('
             cs.id,
             cs.sheet_name AS name,
             COALESCE(e.sheet_total,0)  AS sheet_total,
             COALESCE(ll.loan_paid,0)   AS loan_paid,
-            -- 🔹 match Customer Sheet: remaining = loan_paid - sheet_total (signed)
+            /* match Customer Sheet: remaining = loan_paid - sheet_total (signed) */
             (COALESCE(ll.loan_paid,0) - COALESCE(e.sheet_total,0)) AS remaining_signed,
-            -- 🔹 dues only (positive absolute of negatives) for grand total
+            /* dues only (positive absolute of negatives) for grand total */
             CASE
-              WHEN (COALESCE(ll.loan_paid,0) - COALESCE(e.sheet_total,0)) < 0
-              THEN ABS(COALESCE(ll.loan_paid,0) - COALESCE(e.sheet_total,0))
-              ELSE 0
+            WHEN (COALESCE(ll.loan_paid,0) - COALESCE(e.sheet_total,0)) < 0
+            THEN ABS(COALESCE(ll.loan_paid,0) - COALESCE(e.sheet_total,0))
+            ELSE 0
             END AS due_abs
         ')
             ->orderBy('name')
@@ -243,20 +275,22 @@ class SummaryController extends Controller
         return response()->json(['rows' => $rows, 'grand' => $grand], 200);
     }
 
-    public function localSalesTotal()
+    public function localSalesTotal(Request $request)
     {
-        return response()->json(['total' => $this->computeLocalSalesTotal()]);
+        $cid = ActiveCycle::id($request);
+        return response()->json(['total' => $this->computeLocalSalesTotal($cid)]);
     }
 
-    private function computeLocalSalesTotal(): float
+    private function computeLocalSalesTotal(int $cid): float
     {
+        // items subtotal per local_id
         $sub = DB::table('local_items')
             ->selectRaw('local_id, '
-                . 'SUM(COALESCE(total_inc_vat, '
-                . '(COALESCE(units,0)*COALESCE(unit_price,0)) + COALESCE(vat,0))) AS items_inc')
+                . 'SUM(COALESCE(total_inc_vat, (COALESCE(units,0)*COALESCE(unit_price,0)) + COALESCE(vat,0))) AS items_inc')
             ->groupBy('local_id');
 
         $grand = DB::table('locals as l')
+            ->where('l.cycle_id', $cid)
             ->leftJoinSub($sub, 'it', 'it.local_id', '=', 'l.id')
             ->selectRaw('SUM(CASE '
                 . 'WHEN l.total_inc_vat IS NOT NULL THEN l.total_inc_vat '
@@ -268,9 +302,20 @@ class SummaryController extends Controller
         return round((float) ($grand ?? 0), 2);
     }
 
-    public function sqTotal(): \Illuminate\Http\JsonResponse
+    public function sqTotal(Request $request): \Illuminate\Http\JsonResponse
     {
-        $sum = (float) DB::table('s_q_clients')->sum('amount');
+        $cid = ActiveCycle::id($request);
+        $sum = (float) DB::table('s_q_clients')->where('cycle_id', $cid)->sum('amount');
+        return response()->json(['total' => round($sum, 2)], 200);
+    }
+
+    public function usClientTotal(Request $request): JsonResponse
+    {
+        $cid = ActiveCycle::id($request);
+        $sum = (float) \Illuminate\Support\Facades\DB::table('us_clients')
+            ->where('cycle_id', $cid)
+            ->sum('amount');
+
         return response()->json(['total' => round($sum, 2)], 200);
     }
 }

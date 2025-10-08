@@ -11,13 +11,15 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('s_q_clients', function (Blueprint $table) {
-            $table->id();
-            $table->date('date');
-            $table->decimal('amount', 15, 2);
-            $table->string('remarks')->nullable();
-            $table->timestamps();
-        });
+        if (!Schema::hasTable('s_q_clients')) {
+            Schema::create('s_q_clients', function (Blueprint $table) {
+                $table->id();
+                $table->date('date');
+                $table->decimal('amount', 15, 2);
+                $table->string('remarks')->nullable();
+                $table->timestamps();
+            });
+        }
     }
 
     /**
@@ -25,6 +27,9 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('s_q_clients');
+        // Only drop if it exists (safe)
+        if (Schema::hasTable('s_q_clients')) {
+            Schema::dropIfExists('s_q_clients');
+        }
     }
 };

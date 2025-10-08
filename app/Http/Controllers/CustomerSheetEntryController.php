@@ -6,11 +6,15 @@ use Illuminate\Http\Request;
 use App\Models\CustomerSheet;
 use App\Models\CustomerSheetEntry;
 use App\Models\CustomerSheetItem;
+use App\Support\ActiveCycle;
+use Illuminate\Validation\Rule;
 
 class CustomerSheetEntryController extends Controller
 {
     public function store(Request $request)
     {
+        $cid = ActiveCycle::id($request);
+
         // 1. Validate required inputs
         $request->validate([
             'sheet_id' => 'required|exists:customer_sheets,id',
@@ -20,8 +24,11 @@ class CustomerSheetEntryController extends Controller
             'items' => 'required|array|min:1',
         ]);
 
+        abort_unless(CustomerSheet::where('id', $request->sheet_id)->where('cycle_id', $cid)->exists(), 403);
+
         // 2. Create the header entry
         $entry = CustomerSheetEntry::create([
+            'cycle_id'            => $cid,
             'customer_sheet_id' => $request->sheet_id,
             'date' => $request->date,
             'supplier' => $request->supplier,
@@ -36,6 +43,7 @@ class CustomerSheetEntryController extends Controller
         // 3. Loop through item rows
         foreach ($request->items as $item) {
             CustomerSheetItem::create([
+                'cycle_id'       => $cid,
                 'entry_id' => $entry->id,
                 'units' => $item['units'],
                 'unit_price' => $item['unit_price'],

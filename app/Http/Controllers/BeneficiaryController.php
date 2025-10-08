@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
+use App\Support\ActiveCycle;
 
 class BeneficiaryController extends Controller
 {
@@ -13,9 +14,12 @@ class BeneficiaryController extends Controller
         return view('sheets.beneficiary_sheet');
     }
 
-    public function data()
+    // keep a single place that builds the payload for a given cycle
+    private function payloadFor(int $cycleId): array
     {
         $rows = DB::table('beneficiary_entries')
+            ->where('cycle_id', $cycleId)          // filter by active cycle
+            ->orderByRaw('COALESCE(date,"0000-00-00") asc')
             ->orderBy('id')
             ->get()
             ->groupBy('beneficiary');
@@ -27,22 +31,44 @@ class BeneficiaryController extends Controller
                 'type'    => $r->type,
                 'amount'  => (float)($r->amount ?? 0),
                 'charity' => $r->charity !== null ? (float)$r->charity : null,
-                'remarks' => (string)($r->remarks ?? '')
+                'remarks' => (string)($r->remarks ?? ''),
             ];
-        })->values();
+        })->values()->all();
 
         $sh1 = $map('shareholder1');
         $sh2 = $map('shareholder2');
         $ch  = $map('charity');
 
-        $sum = fn($c) => round($c->sum('amount'), 2);
-        $sumChar = fn($c) => round($c->sum('charity'), 2);
+        $sum = function (array $arr, string $key = 'amount'): float {
+            $t = 0.0;
+            foreach ($arr as $row) $t += (float)($row[$key] ?? 0);
+            return round($t, 2);
+        };
 
-        return response()->json([
-            'shareholder1' => ['rows' => $sh1, 'total' => $sum(collect($sh1)), 'charity_total' => $sumChar(collect($sh1))],
-            'shareholder2' => ['rows' => $sh2, 'total' => $sum(collect($sh2)), 'charity_total' => $sumChar(collect($sh2))],
-            'charity'      => ['rows' => $ch,  'total' => $sum(collect($ch)),  'charity_total' => $sumChar(collect($ch))],
-        ]);
+        return [
+            'shareholder1' => [
+                'rows'          => $sh1,
+                'total'         => $sum($sh1, 'amount'),
+                'charity_total' => $sum($sh1, 'charity'),
+            ],
+            'shareholder2' => [
+                'rows'          => $sh2,
+                'total'         => $sum($sh2, 'amount'),
+                'charity_total' => $sum($sh2, 'charity'),
+            ],
+            'charity' => [
+                'rows'          => $ch,
+                'total'         => $sum($ch, 'amount'),
+                'charity_total' => $sum($ch, 'charity'),
+            ],
+        ];
+    }
+
+    // accept Request so we can read ?cycle_id or session
+    public function data(Request $request)
+    {
+        $cid = ActiveCycle::id($request);
+        return response()->json($this->payloadFor($cid));
     }
 
     public function store(Request $req)
@@ -57,7 +83,10 @@ class BeneficiaryController extends Controller
         ]);
         if ($v->fails()) return response()->json(['success' => false, 'errors' => $v->errors()], 422);
 
+        $cid = ActiveCycle::id($req);
+
         $id = DB::table('beneficiary_entries')->insertGetId([
+            'cycle_id'    => $cid,
             'beneficiary' => $req->input('beneficiary'),
             'date'        => $req->input('date') ?: null,
             'type'        => $req->input('type'),
@@ -68,14 +97,26 @@ class BeneficiaryController extends Controller
             'updated_at'  => now(),
         ]);
 
-        // return fresh totals for quick UI update
-        return $this->data()->setStatusCode(201);
+        return response()->json([
+            'created_id' => $id,
+            'payload'    => $this->payloadFor($cid),
+        ], 201);
     }
 
-    public function destroy($id)
+    public function destroy(Request $request, $id)
     {
-        DB::table('beneficiary_entries')->where('id', $id)->delete();
-        return $this->data();
+        $cid = ActiveCycle::id($request);
+        
+        $deleted = DB::table('beneficiary_entries')
+            ->where('id', $id)
+            ->where('cycle_id', $cid)
+            ->delete();
+
+        if (!$deleted) {
+            return response()->json(['message' => 'Not found in this set'], 404);
+        }
+
+        return response()->json($this->payloadFor($cid));
     }
 
     // app/Http/Controllers/BeneficiaryController.php
@@ -89,15 +130,26 @@ class BeneficiaryController extends Controller
             'remarks' => 'nullable|string|max:500',
         ]);
 
-        DB::table('beneficiary_entries')->where('id', $id)->update([
-            'date'       => $data['date'] ?? null,
-            'type'       => $data['type'],
-            'amount'     => array_key_exists('amount', $data) ? ((float)($data['amount'] ?? 0)) : 0,
-            'charity'    => array_key_exists('charity', $data) ? ($data['charity'] !== null ? (float)$data['charity'] : null) : null,
-            'remarks'    => $data['remarks'] ?? null,
-            'updated_at' => now(),
-        ]);
+        $cid = ActiveCycle::id($req);
 
-        return $this->data(); // return fresh payload like store/delete
+        $affected = DB::table('beneficiary_entries')
+            ->where('id', $id)
+            ->where('cycle_id', $cid)
+            ->update([
+                'date'       => $data['date'] ?? null,
+                'type'       => $data['type'],
+                'amount'     => array_key_exists('amount', $data) ? (float)($data['amount'] ?? 0) : 0,
+                'charity'    => array_key_exists('charity', $data)
+                    ? ($data['charity'] !== null ? (float)$data['charity'] : null)
+                    : null,
+                'remarks'    => $data['remarks'] ?? null,
+                'updated_at' => now(),
+            ]);
+
+        if (!$affected) {
+            return response()->json(['message' => 'Not found in this set'], 404);
+        }
+
+        return response()->json($this->payloadFor($cid));
     }
 }
