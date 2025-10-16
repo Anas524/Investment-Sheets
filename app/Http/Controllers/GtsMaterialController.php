@@ -31,11 +31,18 @@ class GtsMaterialController extends Controller
     {
         $c = ActiveCycle::id($request);
 
-        // numeric inputs
-        $shipping = (float) ($request->shipping_cost ?? 0);
-        $dgd      = (float) ($request->dgd ?? 0);
-        $labour   = (float) ($request->labour ?? 0);
-        $totalShipping = $shipping + $dgd + $labour;
+        // money in (from UI)
+        $uiTotal   = round((float)$request->input('ui_total_material', 0), 2);
+        $buyTotal  = round((float)$request->input('total_material_buy', $uiTotal), 2);
+        $noVat     = round((float)$request->input('total_material', 0), 2);
+        $vat       = round((float)$request->input('total_vat', $noVat * 0.05), 2);
+        $weight    = round((float)$request->input('total_weight', 0), 2);
+        
+        // shipping
+        $shipping  = round((float)$request->input('shipping_cost', 0), 2);
+        $dgd       = round((float)$request->input('dgd', 0), 2);
+        $labour    = round((float)$request->input('labour', 0), 2);
+        $totShip   = round((float)$request->input('total_shipping_cost', $shipping + $dgd + $labour), 2);
 
         $material = GtsMaterial::create([
             'cycle_id'            => $c,
@@ -47,14 +54,14 @@ class GtsMaterialController extends Controller
             'shipping_cost'       => $shipping,
             'dgd'                 => $dgd,
             'labour'              => $labour,
-            'total_shipping_cost' => $totalShipping,     // <-- persist the sum
+            'total_shipping_cost' => $totShip,
 
-            // placeholders; will be recomputed below from items
-            'total_material'      => 0,
-            'ui_total_material'   => 0,
-            'total_vat'           => 0,
-            'total_material_buy'  => 0,
-            'total_weight'        => 0,
+            // totals from UI
+            'total_material'      => $noVat,
+            'total_vat'           => $vat,
+            'total_material_buy'  => $buyTotal,
+            'ui_total_material'   => $uiTotal,
+            'total_weight'        => $weight,
 
             'mode_of_transaction' => $request->mode_of_transaction,
             'receipt_no'          => $request->receipt_no,
@@ -62,48 +69,18 @@ class GtsMaterialController extends Controller
             'status'              => true,
         ]);
 
-        // Accept "items" or "materials"
-        $itemsPayload = $request->items ?? $request->materials ?? [];
-        foreach ($itemsPayload as $item) {
+        // items (unchanged)
+        $items = $request->items ?? $request->materials ?? [];
+        foreach ($items as $it) {
             $material->items()->create([
-                'description'     => $item['description']    ?? '',
-                'units'           => $item['units']          ?? 0,
-                'unit_price'      => $item['unit_price']     ?? 0,
-                'vat'             => $item['vat']            ?? 0,
-                'weight_per_ctn'  => $item['weight_per_ctn'] ?? 0,
-                'ctns'            => $item['ctns']           ?? 0,
+                'description'     => $it['description']     ?? '',
+                'units'           => $it['units']           ?? 0,
+                'unit_price'      => $it['unit_price']      ?? 0,
+                'vat'             => $it['vat']             ?? 0,
+                'weight_per_ctn'  => $it['weight_per_ctn']  ?? 0,
+                'ctns'            => $it['ctns']            ?? 0,
             ]);
         }
-
-        $material->load('items');
-
-        // --- authoritative recompute (matches what the UI header shows) ---
-        $totalNoVat   = 0.0;   // sum of units*unit_price
-        $totalBuy     = 0.0;   // header / “Total material buy”
-        $totalWeight  = 0.0;
-
-        foreach ($material->items as $it) {
-            $units     = (float) ($it->units ?? 0);
-            $unit      = (float) ($it->unit_price ?? 0);
-            $vatInput  = (float) ($it->vat ?? 0);
-            $wctn      = (float) ($it->weight_per_ctn ?? 0);
-            $ctns      = (float) ($it->ctns ?? 0);
-
-            $base   = $units * $unit;                      // no VAT
-            $rowBuy = ($vatInput > 1) ? ($base * $vatInput) : $base;  // old rule
-
-            $totalNoVat  += $base;
-            $totalBuy    += $rowBuy;
-            $totalWeight += $wctn * $ctns;
-        }
-
-        $material->update([
-            'total_material'      => $totalNoVat,
-            'ui_total_material'   => $totalBuy,  // <- drives header & KPIs
-            'total_vat'           => $totalNoVat * 0.05,
-            'total_material_buy'  => $totalBuy,
-            'total_weight'        => $totalWeight,
-        ]);
 
         return response()->json([
             'id'                  => $material->id,
@@ -120,10 +97,10 @@ class GtsMaterialController extends Controller
         $c = ActiveCycle::id($request);
         $material = GtsMaterial::with('items')->forCycle($c)->findOrFail($id);
 
-        // base fields (no totals here)
-        $shipping = (float) ($request->shipping_cost ?? 0);
-        $dgd      = (float) ($request->dgd ?? 0);
-        $labour   = (float) ($request->labour ?? 0);
+        // basic fields
+        $shipping = round((float)$request->input('shipping_cost', 0), 2);
+        $dgd      = round((float)$request->input('dgd', 0), 2);
+        $labour   = round((float)$request->input('labour', 0), 2);
 
         $material->mode_of_transaction = $request->mode_of_transaction;
         $material->receipt_no          = $request->receipt_no;
@@ -131,6 +108,7 @@ class GtsMaterialController extends Controller
         $material->shipping_cost       = $shipping;
         $material->dgd                 = $dgd;
         $material->labour              = $labour;
+        $material->total_shipping_cost = round((float)$request->input('total_shipping_cost', $shipping + $dgd + $labour), 2);
 
         // If items are sent, replace them
         if ($request->has('materials') && is_array($request->materials)) {
@@ -159,38 +137,50 @@ class GtsMaterialController extends Controller
             }
         }
 
-        $material->load('items');
-
-        // Recompute from CURRENT items (authoritative)
-        $totalNoVat  = 0.0; // sum of units*unit_price
-        $totalBuy    = 0.0; // “Total material buy” (header 6th column)
-        $totalWeight = 0.0;
-
-        foreach ($material->items as $it) {
-            $units    = (float) ($it->units ?? 0);
-            $unit     = (float) ($it->unit_price ?? 0);
-            $vatInput = (float) ($it->vat ?? 0);
-            $wctn     = (float) ($it->weight_per_ctn ?? 0);
-            $ctns     = (float) ($it->ctns ?? 0);
-
-            $base   = $units * $unit;
-            $rowBuy = ($vatInput > 1) ? ($base * $vatInput) : $base;
-
-            $totalNoVat  += $base;
-            $totalBuy    += $rowBuy;
-            $totalWeight += ($wctn * $ctns);
+        // Prefer incoming UI totals if present
+        $hasUi      = $request->filled('ui_total_material');
+        $hasBuy     = $request->filled('total_material_buy');
+        $hasNoVat   = $request->filled('total_material');
+        $hasVat     = $request->filled('total_vat');
+        $hasWeight  = $request->filled('total_weight');
+    
+        if ($hasUi || $hasBuy || $hasNoVat || $hasVat || $hasWeight) {
+            if ($hasUi)     $material->ui_total_material  = round((float)$request->ui_total_material, 2);
+            if ($hasBuy)    $material->total_material_buy = round((float)$request->total_material_buy, 2);
+            if ($hasNoVat)  $material->total_material     = round((float)$request->total_material, 2);
+            if ($hasVat)    $material->total_vat          = round((float)$request->total_vat, 2);
+            if ($hasWeight) $material->total_weight       = round((float)$request->total_weight, 2);
+        } else {
+            // Fallback: recompute from items (legacy callers)
+            $material->load('items');
+            $totalNoVat  = 0.0;
+            $totalBuy    = 0.0;
+            $totalWeight = 0.0;
+    
+            foreach ($material->items as $it) {
+                $units    = (float) ($it->units ?? 0);
+                $unit     = (float) ($it->unit_price ?? 0);
+                $vatInput = (float) ($it->vat ?? 0);
+                $wctn     = (float) ($it->weight_per_ctn ?? 0);
+                $ctns     = (float) ($it->ctns ?? 0);
+    
+                $base   = $units * $unit;
+                $rowBuy = ($vatInput > 1) ? ($base * $vatInput) : $base;
+    
+                $totalNoVat  += $base;
+                $totalBuy    += $rowBuy;
+                $totalWeight += ($wctn * $ctns);
+            }
+    
+            $material->total_material      = round($totalNoVat, 2);
+            $material->total_vat           = round($totalNoVat * 0.05, 2);
+            $material->total_material_buy  = round($totalBuy, 2);
+            $material->ui_total_material   = round($totalBuy, 2);
+            $material->total_weight        = round($totalWeight, 2);
         }
-
-        $material->total_material      = $totalNoVat;
-        $material->total_vat           = $totalNoVat * 0.05;  // your rule
-        $material->total_material_buy  = $totalBuy;
-        $material->ui_total_material   = $totalBuy;           // <== keep UI correct
-        $material->total_weight        = $totalWeight;
-
-        $material->total_shipping_cost = $shipping + $dgd + $labour;
-
+    
         $material->save();
-
+    
         return response()->json([
             'ok'                  => true,
             'total_shipping_cost' => $material->total_shipping_cost,

@@ -1,3 +1,5 @@
+@php($isClosed = $isClosed ?? (isset($cycle) && ($cycle->status ?? null) === 'closed'))
+
 <div class="p-6">
   <!-- Totals Section -->
   <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -41,7 +43,9 @@
           <th class="border p-2 w-32">Brief Description</th>
           <th class="border p-2 w-32">Total Material</th>
           <th class="border p-2 w-32">Total Shipping Cost</th>
-          <th class="border p-2 w-24">Action</th>
+          @unless ($isClosed)
+            <th class="border p-2 w-24 action-col" data-col="action">Action</th>
+          @endunless
         </tr>
       </thead>
       <tbody id="materialTableBody">
@@ -69,6 +73,8 @@
           type="number"
           placeholder="0"
           data-field="units"
+          step="any" 
+          inputmode="decimal"
           class="material-input editable-input w-full rounded px-1 py-0.5 bg-white border border-gray-300 focus:outline-none" />
       </td>
 
@@ -78,6 +84,8 @@
           type="number"
           placeholder="0"
           data-field="unitPrice"
+          step="any" 
+          inputmode="decimal"
           class="material-input editable-input w-full rounded px-1 py-0.5 bg-white border border-gray-300 focus:outline-none" />
       </td>
 
@@ -87,6 +95,8 @@
           type="number"
           placeholder="0"
           data-field="vat"
+          step="any" 
+          inputmode="decimal"
           class="material-input editable-input w-full rounded px-1 py-0.5 bg-white border border-gray-300 focus:outline-none" />
       </td>
 
@@ -99,6 +109,8 @@
           type="number"
           placeholder="0"
           data-field="weightPerCtn"
+          step="any" 
+          inputmode="decimal"
           class="material-input editable-input w-full rounded px-1 py-0.5 bg-white border border-gray-300 focus:outline-none" />
       </td>
 
@@ -108,6 +120,8 @@
           type="number"
           placeholder="0"
           data-field="ctns"
+          step="any" 
+          inputmode="decimal"
           class="material-input editable-input w-full rounded px-1 py-0.5 bg-white border border-gray-300 focus:outline-none" />
       </td>
 

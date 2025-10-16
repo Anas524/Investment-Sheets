@@ -1,3 +1,5 @@
+@php($isClosed = $isClosed ?? (isset($cycle) && ($cycle->status ?? null) === 'closed'))
+
 <div class="sq-client-wrapper px-4 py-6 min-h-screen">
   <div class="max-w-2xl mx-auto">
     <!-- Form Card -->
@@ -44,7 +46,9 @@
             <th class="p-2 w-32">Date</th>
             <th class="p-2 w-32">Amount</th>
             <th class="p-2">Remarks</th>
-            <th class="p-2 w-24">Action</th>
+            @unless ($isClosed)
+              <th class="p-2 w-24">Action</th>
+            @endunless
           </tr>
           <tr class="bg-gray-100 text-black sticky top-9 z-30">
             <th>

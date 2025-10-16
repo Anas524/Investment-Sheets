@@ -184,3 +184,74 @@ td {
   /* indigo-700 */
   color: #ffffff;
 }
+
+/* keep this in your stylesheet */
+.dynamic-textarea,
+.gts-area,
+.receipt-no-input,
+.remarks-input {
+  line-height: 1.25;
+  white-space: pre-wrap;
+  word-break: break-word;
+  resize: none;
+  overflow: hidden;
+  min-height: 36px;
+}
+
+/* Hide write UI, but keep sheet tabs + whitelisted controls */
+html.is-cycle-closed button:not(.sheet-tab):not(.allow-when-closed),
+html.is-cycle-closed [type=button]:not(.sheet-tab):not(.allow-when-closed),
+html.is-cycle-closed [type=submit]:not(.allow-when-closed),
+html.is-cycle-closed .btn:not(.allow-when-closed),
+html.is-cycle-closed .add-row-btn,
+html.is-cycle-closed .btn-add,
+html.is-cycle-closed .btn-primary.add,
+html.is-cycle-closed .addButton,
+html.is-cycle-closed form[action*="store"]:not(.allow-when-closed),
+html.is-cycle-closed .upload-btn,
+html.is-cycle-closed .btn-edit,
+html.is-cycle-closed .btn-delete,
+html.is-cycle-closed .btn-copy {
+  display: none !important;
+}
+
+html.is-cycle-closed .closed-hide {
+  display: none !important;
+}
+
+html.is-cycle-closed .closed-muted {
+  opacity: .55;
+  pointer-events: none;
+}
+
+/* Inputs read-only unless explicitly allowed */
+html.is-cycle-closed input:not(.allow-when-closed),
+html.is-cycle-closed select:not(.allow-when-closed),
+html.is-cycle-closed textarea:not(.allow-when-closed) {
+  pointer-events: none;
+  opacity: .55;
+}
+
+html.is-cycle-closed .action,
+html.is-cycle-closed .action-col {
+  display: none !important;
+}
+
+/* Stretch tables to fill width when set is closed */
+html.is-cycle-closed table {
+  table-layout: auto !important;
+  width: 100% !important;
+  border-collapse: collapse !important;
+  border-spacing: 0 !important;
+}
+
+html.is-cycle-closed th,
+html.is-cycle-closed td {
+  width: auto !important;
+}
+
+/* If anything is still hidden, it collapses fully */
+html.is-cycle-closed th.closed-hide,
+html.is-cycle-closed td.closed-hide {
+  display: none !important;
+}

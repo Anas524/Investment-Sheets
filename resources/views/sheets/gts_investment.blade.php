@@ -1,3 +1,5 @@
+@php($isClosed = $isClosed ?? (isset($cycle) && ($cycle->status ?? null) === 'closed'))
+
 <div class="p-6">
   <!-- <h2 class="text-2xl font-bold mb-4">Investment Sheet</h2> -->
 
@@ -38,7 +40,9 @@
             <th class="border p-2 w-32">Investor</th>
             <th class="border p-2 w-32">Investment Amount</th>
             <th class="border p-2 w-32">Payment Method</th>
-            <th class="border p-2 w-24">Action</th>
+            @unless ($isClosed)
+              <th class="border p-2 w-24 action-col" data-col="action">Action</th>
+            @endunless
           </tr>
         </thead>
         <tbody id="investmentTableBody">

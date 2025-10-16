@@ -34,20 +34,22 @@ class CustomerSheetController extends Controller
     public function create(Request $request)
     {
         $cid = ActiveCycle::id($request);
+        $name = strtoupper(trim((string)$request->input('sheet_name', '')));
+        $request->merge(['sheet_name' => $name]);
 
         $request->validate([
             'sheet_name' => [
                 'required',
                 'string',
-                'max:255',
+                'max:60',
                 Rule::unique('customer_sheets', 'sheet_name')
                     ->where(fn($q) => $q->where('cycle_id', $cid)),
             ],
         ]);
 
         $sheet = CustomerSheet::create([
-            'cycle_id'   => $cid,
-            'sheet_name' => strtoupper(trim($request->sheet_name)),
+            'cycle_id' => $cid,
+            'sheet_name' => $name,
         ]);
 
         return response()->json(['success' => true, 'id' => $sheet->id]);
@@ -104,15 +106,20 @@ class CustomerSheetController extends Controller
         );
 
         // normalize aliases
-        $tmBuy = $request->input('total_material_buy',
-                $request->input('total_material', 0));
+        $tmBuy = $request->input(
+            'total_material_buy',
+            $request->input('total_material', 0)
+        );
 
-        $tsCost = $request->input('total_shipping_cost',
-                $request->input('total_shipping',
-                    ($request->input('shipping_cost', 0)
+        $tsCost = $request->input(
+            'total_shipping_cost',
+            $request->input(
+                'total_shipping',
+                ($request->input('shipping_cost', 0)
                     + $request->input('dgd', 0)
                     + $request->input('labour', 0))
-                ));
+            )
+        );
 
         CustomerSheetEntry::create([
             'cycle_id'            => $cid,
@@ -397,13 +404,25 @@ class CustomerSheetController extends Controller
 
     public function updateSheet(Request $request)
     {
+        $cid  = ActiveCycle::id($request);
+        $name = strtoupper(trim((string) $request->input('sheet_name', '')));
+        $request->merge(['sheet_name' => $name]);
+
         $validated = $request->validate([
-            'id'         => 'required|exists:customer_sheets,id',
-            'sheet_name' => 'required|string',
+            'id'         => ['required', 'exists:customer_sheets,id'],
+            'sheet_name' => [
+                'required',
+                'string',
+                'max:60', // match live’s 60-char cap
+                Rule::unique('customer_sheets', 'sheet_name')
+                    ->where(fn($q) => $q->where('cycle_id', $cid))
+                    ->ignore($request->id),
+            ],
         ]);
 
         \App\Models\CustomerSheet::where('id', $validated['id'])
-            ->update(['sheet_name' => $validated['sheet_name']]);
+            ->where('cycle_id', $cid) // safety
+            ->update(['sheet_name' => $name]);
 
         return response()->json(['message' => 'Sheet updated']);
     }

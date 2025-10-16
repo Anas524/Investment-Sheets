@@ -1,4 +1,39 @@
 window.sheetTotals = window.sheetTotals || { material: 0, shipping: 0, investment: 0 };
+const MAT_ROOT = '#sheet-gts-material';
+const DETAIL_SEL = '.mat-detail-row, .detail-row';
+
+const IS_CLOSED = !!window.__SET_IS_CLOSED;
+
+window._autoSizeTA = window._autoSizeTA || function (el) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
+};
+
+function _compactReceiptResize(scope) {
+  const rec = $(scope).find('textarea.receipt-no-textarea')[0];
+  const rem = $(scope).find('textarea.remarks-textarea')[0];
+  if (!rec || !rem) return;
+
+  const v = (rec.value || '').trim();
+  const short = v.length === 0 || (v.length <= 20 && !v.includes('\n'));
+
+  if (short) {
+    // collapse receipt to a single row
+    rec.style.minHeight = '36px';
+    rec.style.height = '36px';
+    // give more space to remarks
+    rem.style.minHeight = '180px';
+  } else {
+    rec.style.minHeight = '0px';
+    rec.style.height = 'auto';
+    rem.style.minHeight = '120px';
+  }
+
+  // autosize both after min-heights are set
+  window._autoSizeTA?.(rec);
+  window._autoSizeTA?.(rem);
+}
 
 function updateCombinedCard() {
   const st = window.sheetTotals || { material: 0, shipping: 0, investment: 0 };
@@ -29,7 +64,7 @@ $(function () {
   fetchAndUpdateInvestmentTotal();
 
   // init + load (guarded by element presence so other pages don’t run this)
-  if ($('#materialTableBody').length) {
+  if ($('#sheet-gts-material').length) {
     initMaterialLogic();
     loadGtsMaterials();
   }
@@ -56,6 +91,7 @@ function initMaterialLogic() {
   const $modalDescription = $("#modalDescription");
 
   $("#addRowBtn").on("click", function () {
+    if (IS_CLOSED) return;
     $("#typeSelectModal").removeClass("hidden").addClass("flex");
   });
 
@@ -105,6 +141,17 @@ function initMaterialLogic() {
     // Hide modal
     $("#addRowModal").addClass("hidden").removeClass("flex");
 
+    const COLS = IS_CLOSED ? 7 : 8; // header columns without Action vs with Action
+
+    const actionCellHtml = IS_CLOSED
+      ? '' // no action cell when closed
+      : `<td class="border p-2 text-center">
+          <div class="flex items-center justify-center gap-1">
+            <button class="materials-submit-btn bg-green-500 hover:bg-green-600 text-white px-2 py-1 rounded">Submit</button>
+            <button class="remove-row bg-red-500 hover:bg-red-600 text-white px-2 py-1 rounded">Delete</button>
+          </div>
+        </td>`;
+
     // Create header row
     const $headerRow = $(`
       <tr class="header-row cursor-pointer hover:bg-gray-100" data-brief="${description}" data-submitted="false" data-new="true">
@@ -115,19 +162,14 @@ function initMaterialLogic() {
         <td class="border p-2">${description}</td>
         <td class="border p-2 header-total-material">AED 0</td>
         <td class="border p-2 header-total-shipping">AED 0</td>
-        <td class="border p-2 text-center">
-          <div class="flex items-center justify-center gap-1">
-            <button class="submit-btn bg-green-500 hover:bg-green-600 text-white px-2 py-1 rounded">Submit</button>
-            <button class="remove-row bg-red-500 hover:bg-red-600 text-white px-2 py-1 rounded">Delete</button>
-          </div>
-        </td>
+        ${actionCellHtml}
       </tr>
     `);
 
     // Create detail row
     const $detailRow = $(`
-      <tr class="detail-row relative hidden" data-new="true">
-        <td colspan="8" class="p-2 bg-gray-50">
+      <tr class="mat-detail-row detail-row relative hidden" data-new="true">
+        <td colspan="${COLS}" class="p-2 bg-gray-50">
         <div class="text-center font-bold text-xl mb-4 bg-blue-200 p-2">${supplierName}</div>
 
           <div class="flex justify-center">
@@ -144,8 +186,8 @@ function initMaterialLogic() {
               <!-- Right Section -->
               <div class="space-y-2 border-4 border-zinc-500 p-5 bg-white">
                 <div class="flex items-start gap-2"><span class="font-semibold w-56">Mode of Transaction:</span> <input type="text" placeholder="Enter Transaction Method" class="flex-1 editable-input w-full rounded px-2 py-1 bg-white border border-gray-300 focus:outline-none" /></div>
-                <div class="flex items-start gap-2"><span class="font-semibold w-56">Receipt No:</span> <textarea placeholder="Enter receipt numbers" class="flex-1 dynamic-textarea w-full rounded px-2 py-1 bg-white border border-gray-300 focus:outline-none resize-none overflow-hidden"></textarea></div>
-                <div class="flex items-start gap-2"><span class="font-semibold w-56">Remarks:</span> <textarea placeholder="Enter Remarks" class="flex-1 dynamic-textarea w-full rounded px-2 py-1 bg-white border border-gray-300 focus:outline-none resize-none overflow-hidden"></textarea></div>
+                <div class="flex items-start gap-2"><span class="font-semibold w-56">Receipt No:</span> <textarea placeholder="Enter receipt numbers" class="gts-area receipt-no-textarea flex-1 dynamic-textarea w-full rounded px-2 py-1 bg-white border border-gray-300 focus:outline-none resize-none overflow-hidden whitespace-pre-wrap break-words leading-snug text-[13px] md:text-[14px]"></textarea></div>
+                <div class="flex items-start gap-2"><span class="font-semibold w-56">Remarks:</span> <textarea placeholder="Enter Remarks" class="gts-area dynamic-textarea flex-1 w-full rounded px-2 py-1 bg-white border border-gray-300 focus:outline-none resize-none overflow-hidden whitespace-pre-wrap break-words leading-snug text-[13px] md:text-[14px]"></textarea></div>
               </div>
             </div>
           </div>
@@ -166,12 +208,12 @@ function initMaterialLogic() {
                   <th class="border p-1 w-32">Total Weight</th>
                 </tr>
               </thead>
-              <tbody id="itemTableBody">
+              <tbody class="item-table-body">
                 <!-- Rows added here -->
               </tbody>
             </table>
 
-            <button id="addItemRowBtn" class="mt-2 px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600">+ Add More Items</button>
+            <button type="button" class="add-item-row-btn mt-2 px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600">+ Add More Items</button>
           </div>
 
           <!-- Summary Footer -->
@@ -199,6 +241,8 @@ function initMaterialLogic() {
                   value="0"
                   min="0"
                   data-field="shippingCost"
+                  step="any" 
+                  inputmode="decimal"
                   class="shipping-input w-full bg-yellow-100 border-0 focus:outline-none"
                 />
               </div>
@@ -212,6 +256,8 @@ function initMaterialLogic() {
                   value="0"
                   min="0"
                   data-field="dgd"
+                  step="any" 
+                  inputmode="decimal"
                   class="shipping-input flex-1 bg-yellow-100 border-0 focus:outline-none"
                 />
               </div>
@@ -225,6 +271,8 @@ function initMaterialLogic() {
                   value="0"
                   min="0"
                   data-field="labour"
+                  step="any" 
+                  inputmode="decimal"
                   class="shipping-input flex-1 bg-yellow-100 border-0 focus:outline-none"
                 />
               </div>
@@ -245,13 +293,17 @@ function initMaterialLogic() {
     $tableBody.append($headerRow, $detailRow);
 
     // Setup correct S.NO for item row
-    const $itemTableBody = $detailRow.find("#itemTableBody");
+    const $itemTableBody = $detailRow.find(".item-table-body");
     const nextSerial = 1;
     const firstRow = $("#itemRowTemplate").html().replace(/__SNO__/g, nextSerial);
     $itemTableBody.append(firstRow);
 
     // Reset & initialize all values inside this detail row
     $detailRow.find("input, textarea").val("");
+
+    $detailRow.find('textarea.dynamic-textarea').each(function () { window._autoSizeTA?.(this); });
+    _compactReceiptResize($detailRow);
+
     $detailRow.find(".total-weight-kg, .total-vat, .total-material-buy, .total-material-without-vat, .total-shipping-cost").text("AED 0");
     $detailRow.find(".dgd-value, .labour-value, .shipping-cost-value").text("AED 0");
 
@@ -304,51 +356,43 @@ function initMaterialLogic() {
     });
   });
 
-  // Also handle on blur (in case user tabs out)
-  $(document).on("blur", ".dynamic-textarea", function () {
-    const $textarea = $(this);
-
-    // Remove all edit styles and revert to plain display
-    $textarea.css({
-      "border": "none",
-      "background": "transparent",
-      "outline": "none",
-      "box-shadow": "none",
-      "resize": "none",
-      "overflow": "hidden",
-      "height": "auto",
-      "max-height": "none"
+  // Grow as you type
+  $(document)
+    .off('input.dynamicTA')
+    .on('input.dynamicTA', '.dynamic-textarea', function () {
+      window._autoSizeTA(this);
     });
 
-    // Optional: trim value to remove white space growth
-    $textarea.val($textarea.val().trim());
-  });
-
-  $(document).on("focus", "input, textarea", function () {
-    $(this).css({
-      "border": "",
-      "background": "",
-      "outline": "",
-      "box-shadow": "",
-      "resize": "",
-      "overflow": "",
-      "height": "",
-      "max-height": ""
+  // Keep full height after blur; keep borders intact
+  $(document)
+    .off('blur.dynamicTA')
+    .on('blur.dynamicTA', '.dynamic-textarea', function () {
+      this.value = this.value.trim();
+      window._autoSizeTA(this);
     });
-  });
 
-  // Bind Live Updates handler, it updates instantly while typing
-  $(document).on("input", ".material-input, .shipping-input", function () {
-    $(".detail-row").each(function () {
-      const $detailRow = $(this);
-      const $headerRow = $detailRow.prev(".header-row");
+  // when typing in Receipt No, re-evaluate the layout
+  $(document)
+    .off('input.receiptCompact')
+    .on('input.receiptCompact', 'textarea.receipt-no-textarea', function () {
+      _compactReceiptResize($(this).closest('.detail-row, .mat-detail-row'));
+    });
+
+  // Live typing: recalc only the current row
+  $(document).on(
+    'input.gtsmat',
+    `${MAT_ROOT} ${DETAIL_SEL} .material-input, ${MAT_ROOT} ${DETAIL_SEL} .shipping-input`,
+    function () {
+      const $detailRow = $(this).closest(DETAIL_SEL);
+      const $headerRow = $detailRow.prev('.header-row');
       calculateRowTotals($detailRow, $headerRow);
-    });
-    updateGtsTotalsFromDOM();
-  });
+      updateGtsTotalsFromDOM();
+      document.dispatchEvent(new CustomEvent('gts:totals-changed'));
+    }
+  );
 
   // Ensure summary-footer inputs (shipping/dgd/labour) also toggle the Update button
-  $(document).on('input change', '.detail-row .shipping-input', function () {
+  $(document).on('input change', `${MAT_ROOT} ${DETAIL_SEL} .shipping-input`, function () {
     const $detailRow = $(this).closest('.detail-row');
     const $headerRow = $detailRow.prev('.header-row');
 
@@ -365,78 +409,81 @@ function initMaterialLogic() {
     this.style.height = (this.scrollHeight) + "px";
   });
 
-  // For Item Table row adding
-  $(document).on("click", "#addItemRowBtn", function () {
-    const $detailRow = $(this).closest(".detail-row");
-    const $headerRow = $detailRow.prev(".header-row");
+  // “Add item row” (id → class, and scoped)
+  $(document).on('click', `${MAT_ROOT} .add-item-row-btn`, function () {
+    const $detailRow = $(this).closest(DETAIL_SEL);
+    const $headerRow = $detailRow.prev('.header-row');
+    const $tbody = $detailRow.find('.item-table-body');
 
-    // Get the correct table body in this detail section
-    const $tbody = $detailRow.find("#itemTableBody");
-
-    // Get the last S.No from the last row
-    const lastRow = $tbody.find("tr:last-child");
     let nextSerial = 1;
-
+    const lastRow = $tbody.find('tr:last-child');
     if (lastRow.length) {
-      const lastSno = parseInt(lastRow.find("td:first").text(), 10);
-      if (!isNaN(lastSno)) {
-        nextSerial = lastSno + 1;
-      }
+      const lastSno = parseInt(lastRow.find('td:first').text(), 10);
+      if (!isNaN(lastSno)) nextSerial = lastSno + 1;
     }
 
-    // Replace the serial in the template
-    const $newRow = $($("#itemRowTemplate").html().replace("__SNO__", nextSerial));
-    $newRow.attr("data-new", "true"); // Mark row as new
-
+    const $newRow = $($('#itemRowTemplate').html().replace(/__SNO__/g, nextSerial));
+    $newRow.attr('data-new', 'true');
     $tbody.append($newRow);
 
-    // Mark detail row as dirty
-    $detailRow.data("dirty", true);
-
-    // Recalculate row + overall totals
-    $(".detail-row").each(function () {
-      const $row = $(this);
-      const $header = $row.prev(".header-row");
-      calculateRowTotals($row, $header);
-    });
+    calculateRowTotals($detailRow, $headerRow);
     updateGtsTotalsFromDOM();
-
-    // Now, after everything: re-check if update button should show
     toggleUpdateButtonForDetail($detailRow);
   });
 
-  $(document).on("click", ".remove-row", function () {
+  $(document).on("click.gtsmat", `${MAT_ROOT} .remove-row`, function () {
     const $row = $(this).closest("tr");
+    const $detailRow = $row.next(DETAIL_SEL); // header's sibling before removal
     $row.remove();
 
     // Recalculate all detail rows
-    $(".detail-row").each(function () {
+    $(`${MAT_ROOT} ${DETAIL_SEL}`).each(function () {
       const $detailRow = $(this);
       const $headerRow = $detailRow.prev(".header-row");
       calculateRowTotals($detailRow, $headerRow);
     });
 
     updateGtsTotalsFromDOM();
-    renumberRows();
+    renumberRows($(MAT_ROOT));
   });
 
-  function renumberRows() {
-    $("#itemTableBody tr").each(function (index) {
-      $(this).find("td:first").text(index + 1);
+  // Renumber (scoped + class-based)
+  function renumberRows($scope = $(MAT_ROOT)) {
+    $scope.find('.item-table-body tr').each(function (i) {
+      $(this).find('td:first').text(i + 1);
     });
   }
 
-  $(document).on("click", ".header-row", function (e) {
-    // Prevent toggle if clicking on a button or link inside the row
+  $(document).on("click", `${MAT_ROOT} .header-row`, function (e) {
+    // ignore clicks on buttons/links inside the row
     if ($(e.target).is("button") || $(e.target).closest("button").length || $(e.target).is("a")) return;
 
-    $(".detail-row").not($(this).next()).hide();
-    $(this).next(".detail-row").toggle();
+    const $detail = $(this).next(DETAIL_SEL);
+
+    // hide other open detail rows
+    $(`${MAT_ROOT} ${DETAIL_SEL}`).not($detail).hide();
+
+    // toggle this one
+    $detail.toggle();
+
+    // if now visible, autosize textareas + compact receipt immediately after paint
+    if ($detail.is(':visible')) {
+      requestAnimationFrame(() => {
+        $detail.find('textarea.dynamic-textarea').each((_, el) => window._autoSizeTA?.(el));
+        _compactReceiptResize($detail);
+
+        // one more pass after layout settles
+        queueMicrotask(() => {
+          $detail.find('textarea.dynamic-textarea').each((_, el) => window._autoSizeTA?.(el));
+          _compactReceiptResize($detail);
+        });
+      });
+    }
   });
 
-  $(document).on("click", ".submit-btn", function () {
+  $(document).on("click.gtsmat", `${MAT_ROOT} .materials-submit-btn`, function () {
     const $headerRow = $(this).closest("tr");
-    const $detailRow = $headerRow.next(".detail-row");
+    const $detailRow = $headerRow.next(DETAIL_SEL);
 
     // Extract header fields
     const invoiceDate = $headerRow.find("td").eq(1).text().trim();
@@ -488,7 +535,7 @@ function initMaterialLogic() {
 
     // Send to backend
     $.ajax({
-      url: "/gts-materials",
+      url: withCycle("/gts-materials"),
       method: "POST",
       data: data,
       headers: {
@@ -534,9 +581,9 @@ function initMaterialLogic() {
   });
 
   // Update material row from action column
-  $(document).on("click", ".update-material-btn", function () {
+  $(document).on("click.gtsmat", `${MAT_ROOT} .update-material-btn`, function () {
     const $headerRow = $(this).closest("tr.header-row");
-    const $detailRow = $headerRow.next(".detail-row");
+    const $detailRow = $headerRow.next(DETAIL_SEL);
     const id = $headerRow.data("id");
 
     if (!id) {
@@ -565,9 +612,14 @@ function initMaterialLogic() {
       materials: newSnap.items
     };
 
+    const postUrl = (typeof investmentUrl === 'function')
+      ? investmentUrl('gts-materials')
+      : (typeof withCycle === 'function' ? withCycle('/gts-materials') : '/gts-materials');
+
     $.ajax({
-      url: `/gts-materials/${id}`,
-      method: "PUT",
+      url: postUrl,
+      method: "POST",
+      data,
       headers: { "X-CSRF-TOKEN": $('meta[name="csrf-token"]').attr("content") },
       data: data,
       success: function () {
@@ -592,9 +644,9 @@ function initMaterialLogic() {
   let deleteTargetDetail = null;
   let deleteTargetId = null;
 
-  $(document).on("click", ".delete-material-btn", function () {
+  $(document).on("click.gtsmat", `${MAT_ROOT} .delete-material-btn`, function () {
     deleteTargetHeader = $(this).closest("tr");
-    deleteTargetDetail = deleteTargetHeader.next(".detail-row");
+    deleteTargetDetail = deleteTargetHeader.next(DETAIL_SEL);
     deleteTargetId = deleteTargetHeader.data("id");
 
     $("#deleteConfirmModal").removeClass("hidden").addClass("flex");
@@ -611,14 +663,14 @@ function initMaterialLogic() {
     if (!deleteTargetId) return;
 
     $.ajax({
-      url: "/gts-materials/" + deleteTargetId,
+      url: withCycle("/gts-materials/" + deleteTargetId),
       method: "DELETE",
       headers: { "X-CSRF-TOKEN": $('meta[name="csrf-token"]').attr("content") },
       success: function () {
         // Find by id at the moment of success (avoids stale refs)
         const selector = `#materialTableBody tr.header-row[data-id="${deleteTargetId}"]`;
         const $header = $(selector);
-        const $detail = $(`tr.detail-row[data-id="${deleteTargetId}"]`);
+        const $detail = $(`tr${DETAIL_SEL}[data-id="${deleteTargetId}"]`);
 
         // Remove both rows safely (detail may or may not be adjacent)
         $detail.remove();
@@ -644,7 +696,7 @@ function initMaterialLogic() {
 
   let $rowToDelete = null; // temp store clicked row
 
-  $(document).on("click", ".delete-item-btn", function () {
+  $(document).on("click", `${MAT_ROOT} .delete-item-btn`, function () {
     $rowToDelete = $(this).closest("tr");
     const itemId = $rowToDelete.data("item-id");
 
@@ -656,7 +708,7 @@ function initMaterialLogic() {
       $rowToDelete.remove();
 
       // Re-check if update button is needed
-      const $detailRow = $rowToDelete.closest('.detail-row');
+      const $detailRow = $rowToDelete.closest(DETAIL_SEL);
       toggleUpdateButtonForDetail($detailRow);
     }
   });
@@ -667,13 +719,13 @@ function initMaterialLogic() {
     if (!itemId) return;
 
     $.ajax({
-      url: `/gts-materials/items/${itemId}`,
+      url: withCycle(`/gts-materials/items/${itemId}`),
       method: "DELETE",
       headers: { "X-CSRF-TOKEN": $('meta[name="csrf-token"]').attr("content") }
     })
       .done(function (res) {
         // Remove the item row in the UI
-        const $detailRow = $rowToDelete.closest('.detail-row');
+        const $detailRow = $rowToDelete.closest(DETAIL_SEL);
         const $headerRow = $detailRow.prev('.header-row');
         $rowToDelete.remove();
 
@@ -703,7 +755,7 @@ function initMaterialLogic() {
   });
 
   // Upload Click
-  $(document).on('click', '.upload-btn', function () {
+  $(document).on('click.gtsmat', `${MAT_ROOT} .upload-btn`, function () {
     const id = $(this).data('id');
     $('#gtsAttachRowId').val(id);
     $('#gtsAttachmentForm')[0].reset();
@@ -716,7 +768,7 @@ function initMaterialLogic() {
 
     let hasExisting = false;
 
-    $.get(`/gts-materials/get-attachments/${id}`, function (data) {
+    $.get(withCycle(`/gts-materials/get-attachments/${id}`), function (data) {
       if (data.invoice) {
         $('#gtsAttachInvoiceFilename').text(data.invoice.split('/').pop());
         $('#gtsAttachInvoiceStatus').removeClass('hidden');
@@ -753,7 +805,7 @@ function initMaterialLogic() {
   });
 
   // View Click
-  $(document).on('click', '.view-btn', function () {
+  $(document).on('click.gtsmat', `${MAT_ROOT} .view-btn`, function () {
     const row = $(this).closest('tr');
     const id = row.data('id');
     const invoiceNo = row.find('td:nth-child(3)').text().trim(); // Invoice No
@@ -787,7 +839,7 @@ function initMaterialLogic() {
 
     // Fetch data
     $.ajax({
-      url: `/gts-materials/get-attachments/${id}`,
+      url: withCycle(`/gts-materials/get-attachments/${id}`),
       type: 'GET',
       success: function (data) {
         const apply = (url, $link, $name) => {
@@ -842,7 +894,7 @@ function initMaterialLogic() {
     $btn.text(isUpdate ? 'Updating...' : 'Saving...').prop('disabled', true);
 
     $.ajax({
-      url: `/gts-materials/upload-attachments/${id}`,
+      url: withCycle(`/gts-materials/upload-attachments/${id}`),
       type: 'POST',
       data: formData,
       processData: false,
@@ -877,7 +929,7 @@ function initMaterialLogic() {
   });
 
   // ONE watcher for change detection in Materials
-  $(document).on('input change', '.detail-row input, .detail-row textarea', function () {
+  $(document).on('input change', `${MAT_ROOT} ${DETAIL_SEL} input, ${MAT_ROOT} ${DETAIL_SEL} textarea`, function () {
     const $detailRow = $(this).closest('.detail-row');
     if ($detailRow.attr('data-loaded') === 'true' || $detailRow.hasClass('submitted')) {
       toggleUpdateButtonForDetail($detailRow);
@@ -899,6 +951,12 @@ function initMaterialLogic() {
       // make sure totals are fresh
       calculateRowTotals($detailRow, $headerRow);
 
+      const totalMaterialBuy =
+        parseFloat(String($detailRow.find('.total-material-buy').text()).replace(/[^0-9.\-]/g,'')) || 0;
+
+      const uiTotalMaterial =
+        parseFloat(String($headerRow.find('.header-total-material').text()).replace(/[^0-9.\-]/g,'')) || 0;
+
       // payload expected by your controller
       const payload = {
         mode_of_transaction: ($detailRow.find('input[placeholder="Enter Transaction Method"]').val() || '').trim(),
@@ -907,8 +965,10 @@ function initMaterialLogic() {
         shipping_cost: parseFloat($detailRow.find('[data-field="shippingCost"]').val()) || 0,
         dgd: parseFloat($detailRow.find('[data-field="dgd"]').val()) || 0,
         labour: parseFloat($detailRow.find('[data-field="labour"]').val()) || 0,
-        total_material: parseFloat(String($headerRow.find('.header-total-material').text()).replace(/[^\d.-]/g, '')) || 0,
-        total_shipping_cost: parseFloat(String($headerRow.find('.header-total-shipping').text()).replace(/[^\d.-]/g, '')) || 0,
+        total_material: parseFloat(String($headerRow.find('.header-total-material').text()).replace(/[^0-9.\-]/g, '')) || 0,
+        total_shipping_cost: parseFloat(String($headerRow.find('.header-total-shipping').text()).replace(/[^0-9.\-]/g, '')) || 0,
+        total_material_buy: totalMaterialBuy,
+        ui_total_material: uiTotalMaterial,
         materials: []
       };
 
@@ -970,7 +1030,7 @@ function initMaterialLogic() {
     });
 
   // Any input change inside a material detail row => re-check diff
-  $(document).on('input change', '.detail-row input, .detail-row textarea', function () {
+  $(document).on('input change', `${MAT_ROOT} ${DETAIL_SEL} input, ${MAT_ROOT} ${DETAIL_SEL} textarea`, function () {
     const $detailRow = $(this).closest('.detail-row');
     if ($detailRow.attr('data-loaded') === 'true' || $detailRow.hasClass('submitted')) {
       toggleUpdateButtonForDetail($detailRow);
@@ -980,9 +1040,9 @@ function initMaterialLogic() {
   // Recalc + re-format the summary footer whenever Shipping/DGD/Labour change
   $(document).off('input.materialShip change.materialShip')
     .on('input.materialShip change.materialShip',
-      '.detail-row input[data-field="shippingCost"], .detail-row input[data-field="dgd"], .detail-row input[data-field="labour"]',
+      `${MAT_ROOT} ${DETAIL_SEL} input[data-field="shippingCost"], ${MAT_ROOT} ${DETAIL_SEL} input[data-field="dgd"], ${MAT_ROOT} ${DETAIL_SEL} input[data-field="labour"]`,
       function () {
-        const $detailRow = $(this).closest('.detail-row');
+        const $detailRow = $(this).closest(DETAIL_SEL);
         const $headerRow = $detailRow.prev('.header-row');
 
         // Recompute totals for THIS row (keeps AED prefix correct)
@@ -1082,14 +1142,14 @@ function calculateRowTotals($detailRow, $headerRow) {
 
     // MATERIALS rule: if VAT input > 1, treat as multiplier; else show base
     const rowBuy = (vatInput > 1) ? (base * vatInput) : base;
-    $row.find(".total-material").text(rowBuy.toFixed(2));
+    $row.find(".total-material").text(fmtNum7(rowBuy));
 
     totalMaterialNoVAT += base;
     totalVATMoney += vatAmt;
     totalMaterialBuy += rowBuy;
 
     const weightTotal = weightPerCtn * ctns;
-    $row.find(".total-weight").text(weightTotal.toFixed(2));
+    $row.find(".total-weight").text(fmtNum7(weightTotal));
     totalWeight += weightTotal;
     totalUnits += units;
   });
@@ -1189,11 +1249,7 @@ function updateInvestmentTotals(investmentTotal) {
 }
 
 function formatCurrency(value) {
-  const number = Number(value) || 0;
-  return `AED ${number.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  })}`;
+  return window.gtsFmt.aed(value);
 }
 
 function loadGtsMaterials() {
@@ -1221,7 +1277,7 @@ function loadGtsMaterials() {
         year: "numeric"
       });
 
-      const actionButtons = `
+      const actionButtons = IS_CLOSED ? '' : `
         <div class="action-buttons flex justify-center gap-1">
           ${createMaterialIcon('upload-btn', 'bi-cloud-arrow-up-fill', 'Upload Attachments', 'bg-blue-500 hover:bg-blue-600 text-white', id)}
           ${createMaterialIcon('view-btn', 'bi-paperclip', 'View Attachments', 'bg-gray-700 hover:bg-gray-800 text-white', id)}
@@ -1241,6 +1297,8 @@ function loadGtsMaterials() {
         return num(entry.shipping_cost) + num(entry.dgd) + num(entry.labour);
       })();
 
+      const COLS = IS_CLOSED ? 7 : 8;
+
       // Create header row
       const $headerRow = $(`
         <tr class="header-row cursor-pointer hover:bg-gray-100" data-id="${id}" data-loaded="true">
@@ -1251,17 +1309,17 @@ function loadGtsMaterials() {
           <td class="border p-2">${entry.brief_description}</td>
           <td class="border p-2 header-total-material">${formatCurrency(headerMat)}</td>
           <td class="border p-2 header-total-shipping">${formatCurrency(headerShip)}</td>
-          <td class="border p-2 text-center">
+          ${IS_CLOSED ? '' : `<td class="border p-2 text-center">
             <div class="flex flex-col items-center gap-1">
               ${actionButtons}
             </div>
-          </td>
+          </td>`}
         </tr>
       `);
 
       const $detailRow = $(`
-        <tr class="detail-row relative hidden" data-id="${id}">
-          <td colspan="8" class="p-2 bg-gray-50">
+        <tr class="mat-detail-row detail-row relative hidden" data-id="${id}">
+          <td colspan="${COLS}" class="p-2 bg-gray-50">
           <div class="text-center font-bold text-xl mb-4 bg-blue-200 p-2">${entry.supplier_name}</div>
 
             <div class="flex justify-center">
@@ -1278,8 +1336,8 @@ function loadGtsMaterials() {
                 <!-- Right Section -->
                 <div class="space-y-2 border-4 border-zinc-500 p-5 bg-white">
                   <div class="flex items-start gap-2"><span class="font-semibold w-56">Mode of Transaction:</span> <input type="text" placeholder="Enter Transaction Method" class="flex-1 editable-input w-full rounded px-2 py-1 bg-white border border-gray-300 focus:outline-none" /></div>
-                  <div class="flex items-start gap-2"><span class="font-semibold w-56">Receipt No:</span> <textarea placeholder="Enter receipt numbers" class="receipt-no-textarea flex-1 dynamic-textarea w-full rounded px-2 py-1 bg-white border border-gray-300 focus:outline-none overflow-y-auto" style="min-height: 120px;"></textarea></div>
-                  <div class="flex items-start gap-2"><span class="font-semibold w-56">Remarks:</span> <textarea placeholder="Enter Remarks" class="flex-1 dynamic-textarea w-full rounded px-2 py-1 bg-white border border-gray-300 focus:outline-none resize-none overflow-hidden"></textarea></div>
+                  <div class="flex items-start gap-2"><span class="font-semibold w-56">Receipt No:</span> <textarea placeholder="Enter receipt numbers" class="gts-area receipt-no-textarea flex-1 dynamic-textarea w-full rounded px-2 py-1 bg-white border border-gray-300 focus:outline-none overflow-y-auto whitespace-pre-wrap break-words leading-snug text-[13px] md:text-[14px]"></textarea></div>
+                  <div class="flex items-start gap-2"><span class="font-semibold w-56">Remarks:</span> <textarea placeholder="Enter Remarks" class="gts-area dynamic-textarea flex-1 w-full rounded px-2 py-1 bg-white border border-gray-300 focus:outline-none resize-none overflow-hidden whitespace-pre-wrap break-words leading-snug text-[13px] md:text-[14px]"></textarea></div>
                 </div>
               </div>
             </div>
@@ -1300,12 +1358,12 @@ function loadGtsMaterials() {
                     <th class="border p-1 w-32">Total Weight</th>
                   </tr>
                 </thead>
-                <tbody id="itemTableBody" class="item-table-body">
+                <tbody class="item-table-body">
                   <!-- Rows added here -->
                 </tbody>
               </table>
 
-              <button id="addItemRowBtn" class="mt-2 px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600">+ Add More Items</button>
+              <button type="button" class="add-item-row-btn mt-2 px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600">+ Add More Items</button>
             </div>
 
             <!-- Summary Footer -->
@@ -1378,18 +1436,14 @@ function loadGtsMaterials() {
 
       $("#materialTableBody").append($headerRow).append($detailRow);
 
-      // Hide border/background in right-side grid
-      $detailRow.find("input, textarea").each(function () {
+      // Only make item table inputs minimal; keep borders for Receipt/Remarks
+      $detailRow.find(".item-table-body input").each(function () {
         $(this).css({
           "border": "none",
           "background": "transparent",
           "outline": "none",
-          "box-shadow": "none",
-          "resize": "none",
-          "overflow": "hidden",
-          "height": "auto",
-          "max-height": "100px"
-        }).val($(this).val().trim());
+          "box-shadow": "none"
+        });
       });
 
       // Also apply to item table inputs (excluding summary footer)
@@ -1420,16 +1474,21 @@ function loadGtsMaterials() {
       if ($receiptTextarea.length) {
         const normalizedReceipt = (entry.receipt_no || '').replace(/<br\s*\/?>/gi, '\n');
         $receiptTextarea.val(normalizedReceipt);
-
-        // Manually trigger resize
-        $receiptTextarea[0].style.height = 'auto'; // reset height
-        $receiptTextarea[0].style.height = $receiptTextarea[0].scrollHeight + 'px';
+        window._autoSizeTA?.($receiptTextarea[0]);
       }
 
-      $detailRow.find('textarea[placeholder="Enter Remarks"]').val(entry.remarks || "");
+      // Remarks
+      const $remarksTextarea = $detailRow.find('textarea[placeholder="Enter Remarks"]');
+      $remarksTextarea.val(entry.remarks || "");
+      window._autoSizeTA?.($remarksTextarea[0]);
+
+      // Layout pass AFTER values are in
+      _compactReceiptResize($detailRow);
+      // one more after paint to be safe
+      queueMicrotask(() => _compactReceiptResize($detailRow));
 
       // Now render item rows
-      const $itemTableBody = $detailRow.find('#itemTableBody');
+      const $itemTableBody = $detailRow.find('.item-table-body');
 
       if (entry.items && Array.isArray(entry.items)) {
         entry.items.forEach((item, idx) => {
@@ -1448,8 +1507,8 @@ function loadGtsMaterials() {
           // Calculated
           const totalMaterial = (item.unit_price || 0) * (item.units || 0);
           const totalWeight = (item.weight_per_ctn || 0) * (item.ctns || 0);
-          $row.find('.total-material').text(formatCurrency(totalMaterial));
-          $row.find('.total-weight').text(formatCurrency(totalWeight));
+          $row.find('.total-material').text((totalMaterial).toFixed(2));
+          $row.find('.total-weight').text((totalWeight).toFixed(2));
 
           $itemTableBody.append($row);
         });
@@ -1460,7 +1519,7 @@ function loadGtsMaterials() {
       toggleUpdateButtonForDetail($detailRow);
     });
 
-    $(".detail-row").each(function () {
+    $(".mat-detail-row, .detail-row").each(function () {
       const $detailRow = $(this);
       const $headerRow = $detailRow.prev(".header-row");
       calculateRowTotals($detailRow, $headerRow);
@@ -1562,7 +1621,7 @@ function buildMaterialSnapshot($detailRow) {
 
   const snap = {
     mot: t($detailRow.find('input[placeholder="Enter Transaction Method"]').val()),
-    receipt: t(($detailRow.find('textarea.receipt-no-textarea').val() || '').replace(/\r/g, '')),
+    receipt: t(($detailRow.find('textarea.receipt-no-textarea, textarea[placeholder="Enter receipt numbers"]').val() || '').replace(/\r/g, '')),
     remarks: t($detailRow.find('textarea[placeholder="Enter Remarks"]').val()),
     shipping: t($detailRow.find('input[data-field="shippingCost"]').val()),
     dgd: t($detailRow.find('input[data-field="dgd"]').val()),
@@ -1641,6 +1700,18 @@ function paintCardsFromDOM(origin) {
     );
   }
   document.dispatchEvent(new CustomEvent('gts:totals-changed'));
+}
+
+// Show up to 7 decimals, trim trailing zeros
+function fmtNum7(n) {
+  const v = Number(n) || 0;
+  return v.toLocaleString('en-AE', { minimumFractionDigits: 0, maximumFractionDigits: 7 });
+}
+
+// AED with up to 7 dp (detail/footer/header cells). KPIs can keep 2dp elsewhere.
+function fmtAED7(n) {
+  const v = Number(n) || 0;
+  return 'AED ' + v.toLocaleString('en-AE', { minimumFractionDigits: 0, maximumFractionDigits: 7 });
 }
 
 function initInvestmentLogic() {
@@ -1915,7 +1986,7 @@ function initInvestmentLogic() {
         $form.data("original", { ...updatedData });
 
         // Hide save button again
-        $form.find(".save-changes-btn").addClass("hidden");
+        $form.find(".invest-save-changes-btn").addClass("hidden");
 
         fetchAndUpdateInvestmentTotal();
 
@@ -2251,6 +2322,12 @@ function getFileName(url) {
   } catch { return url; }
 }
 
+function isClosed() {
+  return !!window.__SET_IS_CLOSED ||
+         (window.cycle && window.cycle.status === 'closed') ||
+         document.documentElement.classList.contains('is-cycle-closed');
+}
+
 function createInvestmentLayout(
   investmentId = Date.now(),
   investmentDate,
@@ -2283,8 +2360,10 @@ function createInvestmentLayout(
       month: "long",
       year: "numeric",
     });
+  
+  const showActions = !isClosed();
 
-  const actionButtons = `
+  const actionButtons = showActions ? `
     <div class="action-buttons flex items-center justify-center gap-1">
       ${status === "draft" ? `
         <button type="button" class="submit-investment-btn px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700">
@@ -2295,7 +2374,7 @@ function createInvestmentLayout(
       ${createInvestmentIconButton('btn-view-attachment', 'bi-paperclip', 'View Attachments', 'bg-gray-700 hover:bg-gray-800 text-white', investmentId)}
       ${createInvestmentIconButton('delete-investment-btn', 'bi-trash-fill', 'Delete Row', 'bg-red-500 hover:bg-red-600 text-white', investmentId)}
     </div>
-  `;
+  ` : '';
 
   const safeId = String(investmentId).replace(/[^a-zA-Z0-9_-]/g, '');
 
@@ -2310,17 +2389,13 @@ function createInvestmentLayout(
           <span class="investment-amount-display">${formattedAmount}</span>
         </td>
         <td class="border p-2"><span class="payment-method-display">${escapeHtml(safePayment)}</span></td>
-        <td class="border p-2 text-center">
-          <div class="action-buttons flex items-center justify-center gap-1">
-            ${actionButtons}
-          </div>
-        </td>
+        ${showActions ? `<td class="border p-2 text-center action-col" data-col="action">${actionButtons}</td>` : ``}
       </tr>
     `);
 
   const $detailRow = $(`
     <tr class="investment-detail-row relative hidden" data-id="${investmentId}">
-      <td colspan="6" class="p-4 bg-white">
+      <td colspan="${showActions ? 6 : 5}" class="p-4 bg-white">
         <form id="investmentDetailsForm-${investmentId}" data-id="${investmentId}">
           <div class="mt-3 text-right">
             ${status !== "draft" ? `
@@ -2603,6 +2678,8 @@ function isInvestmentChanged($detailRow) {
 
 // Ensure/update the update icon in the Action cell for this row
 function toggleUpdateButtonForInvestment($detailRow) {
+  if (isClosed()) return;
+
   const $headerRow = $detailRow.prev('.investment-header');
   const $cell = $headerRow.find('td:last');
 

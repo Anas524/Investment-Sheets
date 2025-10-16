@@ -14,12 +14,79 @@ const fmt0 = v => num(v).toLocaleString('en-US');
 // AED wrapper
 const aed = v => `AED ${fmt(v)}`;
 
+// --- shared autosize helpers ---
+window._autoSizeTA = window._autoSizeTA || function (el) {
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
+};
+
+// Shrink Receipt to one line when short/empty and give that space to Remarks
+function _compactReceiptResize(scope) {
+    const rec = $(scope).find('textarea.receipt-no-textarea, textarea.receipt-no-input')[0];
+    const rem = $(scope).find('textarea.remarks-textarea, textarea.remarks-input')[0];
+    if (!rec || !rem) return;
+
+    const v = (rec.value || '').trim();
+    const short = v.length === 0 || (v.length <= 20 && !v.includes('\n'));
+
+    // Receipt: collapse to a single line when short
+    rec.style.minHeight = short ? '36px' : '0px';
+    rec.style.height = 'auto';
+    window._autoSizeTA?.(rec);
+
+    // Remarks: NEVER force tall. Keep a tiny base; let autosize grow if needed.
+    rem.style.minHeight = '36px';
+    rem.style.height = 'auto';
+    window._autoSizeTA?.(rem);
+}
+
 $(document).ready(function () {
 
     $.ajaxSetup({
         headers: {
             'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
         }
+    });
+
+    // Autosize while typing + keep full height after blur
+    $(document)
+        .off('input.dynamicTA').on('input.dynamicTA', '.dynamic-textarea', function () {
+            window._autoSizeTA(this);
+        })
+        .off('blur.dynamicTA').on('blur.dynamicTA', '.dynamic-textarea', function () {
+            this.value = this.value.trim();
+            window._autoSizeTA(this);
+        });
+
+    // Re-evaluate compacting when Receipt changes
+    $(document)
+        .off('input.receiptCompact').on('input.receiptCompact', 'textarea.receipt-no-input', function () {
+            _compactReceiptResize($(this).closest('.detail-row'));
+        });
+
+    // When you open/close a row, autosize once it’s visible
+    $(document).off('click.custRowToggle').on('click.custRowToggle', '.customer-header-row', function (e) {
+        if ($(e.target).closest('.btn-upload-attachments, .btn-view-attachments, .save-changes-btn, .delete-btn').length) {
+            e.stopImmediatePropagation();
+            return;
+        }
+        const rowId = $(this).data('id');
+        const $target = $(`.detail-row[data-id="${rowId}"]`);
+
+        $('.detail-row').not($target).slideUp(200);
+        $target.stop(true, true).slideToggle(200, () => {
+            if ($target.is(':visible')) {
+                requestAnimationFrame(() => {
+                    $target.find('textarea.dynamic-textarea').each((_, el) => window._autoSizeTA?.(el));
+                    _compactReceiptResize($target);
+                    queueMicrotask(() => {
+                        $target.find('textarea.dynamic-textarea').each((_, el) => window._autoSizeTA?.(el));
+                        _compactReceiptResize($target);
+                    });
+                });
+            }
+        });
     });
 
     // Open Modal
@@ -49,9 +116,25 @@ $(document).ready(function () {
         // keep your global stash (you use it in customerSaveBtn handler)
         window.tempCustomerRowData = { date, supplier, description };
 
+        const isClosed =
+            (typeof window.isSetClosed === 'function' && window.isSetClosed()) ||
+            !!window.__SET_IS_CLOSED ||
+            (window.cycle && window.cycle.status === 'closed') ||
+            document.documentElement.classList.contains('is-cycle-closed');
+
         const rowId = `customer-${Date.now()}`;
         const serialNumber = $tbody.find('.customer-header-row').length + 1;
         const formattedDate = formatDateToWords(date);
+
+        const actionCell = !isClosed ? `
+            <td class="border p-2 text-center action-col" data-col="action">
+                <div class="flex items-center justify-center gap-1">
+                <button id="customerSaveBtn"
+                        class="submit-btn bg-green-500 hover:bg-green-600 text-white px-2 py-1 rounded">
+                    Submit
+                </button>
+                </div>
+            </td>` : '';
 
         // Create Header Row
         const $headerRow = $(`
@@ -62,18 +145,17 @@ $(document).ready(function () {
                 <td class="border p-2">${description}</td>
                 <td class="border p-2 header-total-material">AED 0</td>
                 <td class="border p-2 header-total-shipping">AED 0</td>
-                <td class="border p-2 text-center">
-                    <div class="flex items-center justify-center gap-1">
-                        <button id="customerSaveBtn" class="submit-btn bg-green-500 hover:bg-green-600 text-white px-2 py-1 rounded">Submit</button>
-                    </div>
-                </td>
+                ${actionCell}
             </tr>
         `);
+
+        // detail colspan must match header col count (6 when closed, 7 when open)
+        const detailColspan = isClosed ? 6 : 7;
 
         // Create Empty Detail Row (we'll enhance this in next step)
         const $detailRow = $(`
         <tr class="detail-row relative hidden" data-new="true" data-id="${rowId}" data-sheet-id="${sheetId}">
-            <td colspan="8" class="p-2 bg-gray-50">
+            <td colspan="${detailColspan}" class="p-2 bg-gray-50">
             <div class="text-center font-bold text-xl mb-4 bg-blue-200 p-2">${supplier}</div>
 
             <div class="flex justify-center">
@@ -90,8 +172,8 @@ $(document).ready(function () {
                 <!-- Right Editable Section -->
                 <div class="space-y-2 border-4 border-zinc-500 p-5 bg-white">
                     <div class="flex items-start gap-2"><span class="font-semibold w-56">Mode of Transaction:</span> <input type="text" name="mode_of_transaction" placeholder="Enter Transaction Method" class="flex-1 editable-input w-full rounded px-2 py-1 bg-white border border-gray-300 mode-of-transaction-input" /></div>
-                    <div class="flex items-start gap-2"><span class="font-semibold w-56">Receipt No:</span> <textarea name="receipt_no" placeholder="Enter receipt numbers" class="flex-1 dynamic-textarea w-full rounded px-2 py-1 bg-white border border-gray-300 resize-none overflow-hidden receipt-no-input""></textarea></div>
-                    <div class="flex items-start gap-2"><span class="font-semibold w-56">Remarks:</span> <textarea name="remarks" placeholder="Enter Remarks" class="flex-1 dynamic-textarea w-full rounded px-2 py-1 bg-white border border-gray-300 resize-none overflow-hidden remarks-input"></textarea></div>
+                    <div class="flex items-start gap-2"><span class="font-semibold w-56">Receipt No:</span> <textarea name="receipt_no" placeholder="Enter receipt numbers" class="receipt-no-textarea flex-1 dynamic-textarea w-full rounded px-2 py-1 bg-white border border-gray-300 resize-none overflow-hidden whitespace-pre-wrap break-words leading-snug text-[13px] md:text-[14px] receipt-no-input"></textarea></div>
+                    <div class="flex items-start gap-2"><span class="font-semibold w-56">Remarks:</span> <textarea name="remarks" placeholder="Enter Remarks" class="flex-1 dynamic-textarea w-full rounded px-2 py-1 bg-white border border-gray-300 resize-none overflow-hidden whitespace-pre-wrap break-words leading-snug text-[13px] md:text-[14px] remarks-input"></textarea></div>
                 </div>
                 </div>
             </div>
@@ -162,6 +244,24 @@ $(document).ready(function () {
 
         // Append both rows
         $tbody.append($headerRow).append($detailRow);
+
+        const $rec = $detailRow.find('textarea.receipt-no-textarea, .receipt-no-input');
+        const $rem = $detailRow.find('textarea.remarks-textarea, .remarks-input');
+
+        // normalize + autosize
+        [$rec, $rem].forEach($t => {
+            const el = $t[0];
+            if (!el) return;
+            el.value = (el.value || '').trim();
+            el.style.height = 'auto';
+            window._autoSizeTA?.(el);        // grows only if needed
+        });
+
+        // autosize & compact immediately after DOM paint
+        requestAnimationFrame(() => {
+            $detailRow.find('textarea.dynamic-textarea').each((_, el) => window._autoSizeTA?.(el));
+            _compactReceiptResize($detailRow);
+        });
 
         const $itemTableBody = $detailRow.find(`#itemTableBody-${rowId}`);
         $itemTableBody.append(createItemRow(1));
@@ -741,7 +841,7 @@ $(document).ready(function () {
     $(document)
         .off('customerSheet:created.cust')
         .on('customerSheet:created.cust', function (_e, payload) {
-            const id   = payload?.id ?? payload?.data?.id;
+            const id = payload?.id ?? payload?.data?.id;
             const name = payload?.name ?? payload?.sheet_name ?? payload?.data?.sheet_name;
             if (!id || !name) return;
             addCustomerSheetUI({ id, name });
@@ -837,87 +937,102 @@ function loadAttachments(entryId, sheetId) {
 }
 
 function recomputeShipping($detailRow, $headerRow) {
-  const n = v => Number(String(v ?? '').replace(/[^\d.-]/g, '')) || 0;
+    const n = v => Number(String(v ?? '').replace(/[^\d.-]/g, '')) || 0;
 
-  const dgd    = n($detailRow.find('.dgd-input').val()      || $detailRow.find('.dgd-value').text());
-  const labour = n($detailRow.find('.labour-input').val()   || $detailRow.find('.labour-value').text());
-  const ship   = n($detailRow.find('.shipping-input').val() || $detailRow.find('.shipping-cost-value').text());
+    const dgd = n($detailRow.find('.dgd-input').val() || $detailRow.find('.dgd-value').text());
+    const labour = n($detailRow.find('.labour-input').val() || $detailRow.find('.labour-value').text());
+    const ship = n($detailRow.find('.shipping-input').val() || $detailRow.find('.shipping-cost-value').text());
 
-  const tot = +(dgd + labour + ship).toFixed(2);
+    const tot = +(dgd + labour + ship).toFixed(2);
 
-  // reflect to UI
-  $detailRow.find('.shipping-cost-value').text(aed(ship));
-  $detailRow.find('.dgd-value').text(aed(dgd));
-  $detailRow.find('.labour-value').text(aed(labour));
-  $detailRow.find('.total-shipping-cost').text(aed(tot));
-  $headerRow.find('.header-total-shipping').text(aed(tot));
+    // reflect to UI
+    $detailRow.find('.shipping-cost-value').text(aed(ship));
+    $detailRow.find('.dgd-value').text(aed(dgd));
+    $detailRow.find('.labour-value').text(aed(labour));
+    $detailRow.find('.total-shipping-cost').text(aed(tot));
+    $headerRow.find('.header-total-shipping').text(aed(tot));
 
-  // keep top cards in sync
-  const sid = Number($headerRow.data('sheet-id') || $detailRow.data('sheet-id'));
-  if (sid && typeof recalcSheetCards === 'function') recalcSheetCards(sid);
+    // keep top cards in sync
+    const sid = Number($headerRow.data('sheet-id') || $detailRow.data('sheet-id'));
+    if (sid && typeof recalcSheetCards === 'function') recalcSheetCards(sid);
 
-  return tot;
+    return tot;
 }
 
 function bindLiveCalculation($detailRow, $headerRow) {
-  $detailRow.off('input.calc')
-    .on('input.calc', '.item-row input, .dgd-input, .labour-input, .shipping-input', function () {
-      // ---------- ITEMS ----------
-      let totalMaterialNoVAT = 0;
-      let totalMaterialBuy   = 0;
-      let totalVAT           = 0;
-      let totalWeight        = 0;
-      let totalUnits         = 0;
+    $detailRow.off('input.calc')
+        .on('input.calc', '.item-row input, .dgd-input, .labour-input, .shipping-input', function () {
+            // ---------- ITEMS ----------
+            let totalMaterialNoVAT = 0;
+            let totalMaterialBuy = 0;
+            let totalVAT = 0;
+            let totalWeight = 0;
+            let totalUnits = 0;
 
-      $detailRow.find('.item-row').each(function () {
-        const $r = $(this);
-        const units      = num($r.find('[data-field="units"]').val());
-        const unitPrice  = num($r.find('[data-field="unitPrice"]').val());
-        const vatRaw     = $r.find('[data-field="vat"]').val();
-        const vatVal     = (vatRaw !== "" && !isNaN(parseFloat(vatRaw))) ? num(vatRaw) : 0;
-        const weightPerC = num($r.find('[data-field="weightPerCtn"]').val());
-        const ctns       = num($r.find('[data-field="ctns"]').val());
+            $detailRow.find('.item-row').each(function () {
+                const $r = $(this);
+                const units = num($r.find('[data-field="units"]').val());
+                const unitPrice = num($r.find('[data-field="unitPrice"]').val());
+                const vatRaw = $r.find('[data-field="vat"]').val();
+                const vatVal = (vatRaw !== "" && !isNaN(parseFloat(vatRaw))) ? num(vatRaw) : 0;
+                const weightPerC = num($r.find('[data-field="weightPerCtn"]').val());
+                const ctns = num($r.find('[data-field="ctns"]').val());
 
-        const materialNoVAT = units * unitPrice;
-        const materialBuy   = vatVal > 0 ? (materialNoVAT * vatVal) : materialNoVAT;
-        const weight        = weightPerC * ctns;
+                const materialNoVAT = units * unitPrice;
+                const materialBuy = vatVal > 0 ? (materialNoVAT * vatVal) : materialNoVAT;
+                const weight = weightPerC * ctns;
 
-        totalMaterialNoVAT += materialNoVAT;
-        totalMaterialBuy   += materialBuy;
-        totalVAT           += vatVal;
-        totalUnits         += units;
-        totalWeight        += weight;
+                totalMaterialNoVAT += materialNoVAT;
+                totalMaterialBuy += materialBuy;
+                totalVAT += vatVal;
+                totalUnits += units;
+                totalWeight += weight;
 
-        $r.find('.total-material').text(fmt(materialBuy));
-        $r.find('.total-weight').text(weight > 0 ? fmt(weight) : '');
-      });
+                $r.find('.total-material').text(fmt(materialBuy));
+                $r.find('.total-weight').text(weight > 0 ? fmt(weight) : '');
+            });
 
-      // ---------- SUMMARY ----------
-      $detailRow.find('.total-material-without-vat').text(aed(totalMaterialNoVAT));
-      $detailRow.find('.total-material-buy').text(aed(totalMaterialBuy));
-      $detailRow.find('.total-vat').text(aed(totalVAT));
-      $detailRow.find('.total-weight-kg').text(fmt(totalWeight));
-      $detailRow.find('.total-units').text(fmt0(totalUnits));
+            // ---------- SUMMARY ----------
+            $detailRow.find('.total-material-without-vat').text(aed(totalMaterialNoVAT));
+            $detailRow.find('.total-material-buy').text(aed(totalMaterialBuy));
+            $detailRow.find('.total-vat').text(aed(totalVAT));
+            $detailRow.find('.total-weight-kg').text(fmt(totalWeight));
+            $detailRow.find('.total-units').text(fmt0(totalUnits));
 
-      // ---------- COSTS (centralized) ----------
-      recomputeShipping($detailRow, $headerRow);
+            // ---------- COSTS (centralized) ----------
+            recomputeShipping($detailRow, $headerRow);
 
-      // header material cell
-      $headerRow.find('.header-total-material').text(aed(totalMaterialBuy));
+            // header material cell
+            $headerRow.find('.header-total-material').text(aed(totalMaterialBuy));
 
-      // save-state only (cards were updated by recomputeShipping)
-      if (typeof isRowDirty === 'function') setSaveState($headerRow, isRowDirty($detailRow));
-    });
+            // save-state only (cards were updated by recomputeShipping)
+            if (typeof isRowDirty === 'function') setSaveState($headerRow, isRowDirty($detailRow));
+        });
 }
 
 function loadCustomerSheet(sheetId) {
+    const $tbody = $('#customerTableBody-${sheetId}');
+    $tbody.empty();
+
+    const isClosed =
+        (typeof window.isSetClosed === 'function' && window.isSetClosed()) ||
+        !!window.__SET_IS_CLOSED ||
+        (window.cycle && window.cycle.status === 'closed') ||
+        document.documentElement.classList.contains('is-cycle-closed');
+
     $.get(withCycle(`/customer-sheet/load/${sheetId}`), function (entries) {
-        const $tbody = $('#customerTableBody');
-        $tbody.empty();
 
         entries.forEach((entry, index) => {
             const srNo = index + 1;
             const rowId = `customer-${Date.now()}-${srNo}`;
+
+            const actionCell = !isClosed ? `
+                <td class="border p-2 text-center action-col" data-col="action">
+                    <div class="flex items-center justify-center gap-1">
+                        <button class="edit-btn text-blue-600 hover:underline">Edit</button>
+                        <button class="delete-btn text-red-600 hover:underline">Delete</button>
+                    </div>
+                </td>` : '';
 
             // Header row
             const $headerRow = $(`
@@ -928,41 +1043,67 @@ function loadCustomerSheet(sheetId) {
                     <td class="border p-2">${entry.description}</td>
                     <td class="border p-2 header-total-material">AED ${entry.total_material_buy}</td>
                     <td class="border p-2 header-total-shipping">AED ${entry.total_shipping_cost}</td>
-                    <td class="border p-2 text-center">
-                        <div class="flex items-center justify-center gap-1">
-                            <button class="edit-btn text-blue-600 hover:underline">Edit</button>
-                            <button class="delete-btn text-red-600 hover:underline">Delete</button>
-                        </div>
-                    </td>
+                    ${actionCell}
                 </tr>
             `);
 
             $tbody.append($headerRow);
+                
+            const detailColspan = isClosed ? 6 : 7;
 
-            // Detail rows
-            entry.items.forEach(item => {
-                const $detailRow = $(`
-                    <tr class="customer-detail-row bg-gray-50 text-sm" data-parent="${rowId}">
-                        <td class="border p-2 text-center"></td>
-                        <td class="border p-2">${item.ctns}</td>
-                        <td class="border p-2">${item.units}</td>
-                        <td class="border p-2">${item.unit_price}</td>
-                        <td class="border p-2">${item.vat}</td>
-                        <td class="border p-2">${item.weight_per_ctn}</td>
-                        <td class="border p-2">${item.total_material}</td>
-                        <td class="border p-2">${item.total_weight}</td>
-                        <td class="border p-2 text-center">–</td>
-                    </tr>
-                `);
-                $tbody.append($detailRow);
-            });
+            // Build inner items table rows
+            const itemsRows = (entry.items || []).map((item, i) => `
+            <tr>
+                <td class="border p-2 text-center">${i + 1}</td>
+                <td class="border p-2">${item.description ?? ''}</td>
+                <td class="border p-2 text-right">${item.units ?? 0}</td>
+                <td class="border p-2 text-right">${Number(item.unit_price ?? 0).toFixed(2)}</td>
+                <td class="border p-2 text-right">${Number(item.vat ?? 0).toFixed(2)}</td>
+                <td class="border p-2 text-right">${item.weight_per_ctn ?? 0}</td>
+                <td class="border p-2 text-right">${Number(item.total_material ?? 0).toFixed(2)}</td>
+                <td class="border p-2 text-right">${Number(item.total_weight ?? 0).toFixed(2)}</td>
+                <td class="border p-2 text-left">${item.remarks ?? ''}</td>
+            </tr>
+            `).join('');
+
+            // One detail row that matches the header width
+            const $detailRow = $(`
+            <tr class="customer-detail-row bg-gray-50 text-sm hidden" data-parent="${rowId}">
+                <td colspan="${detailColspan}" class="p-2">
+                <div class="rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                    <div class="px-4 py-2 bg-[#d7efff] border-b text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                    Items
+                    </div>
+                    <table class="w-full text-sm">
+                    <thead class="text-gray-600">
+                        <tr>
+                        <th class="border p-2 w-10 text-left">#</th>
+                        <th class="border p-2 text-left">Description</th>
+                        <th class="border p-2 w-24 text-right">Units</th>
+                        <th class="border p-2 w-32 text-right">Unit Price</th>
+                        <th class="border p-2 w-24 text-right">VAT</th>
+                        <th class="border p-2 w-32 text-right">Weight/ctn</th>
+                        <th class="border p-2 w-36 text-right">Total w/o VAT</th>
+                        <th class="border p-2 w-32 text-right">Total Weight</th>
+                        <th class="border p-2 text-left">Remarks</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${itemsRows || `<tr><td colspan="9" class="p-3 text-gray-500">No items</td></tr>`}
+                    </tbody>
+                    </table>
+                </div>
+                </td>
+            </tr>
+            `);
+
+            $tbody.append($detailRow);
         });
     });
 }
 
 function formatCurrency(amount) {
-    amount = parseFloat(amount) || 0;
-    return 'AED ' + amount.toLocaleString('en-IN', { minimumFractionDigits: 2 });
+    return window.gtsFmt.aed(amount);
 }
 
 function updateOverallTotals() {
@@ -1076,6 +1217,12 @@ function renderCustomerSheetRows(sheetId, entries) {
     const tbody = $(`#customerTableBody-${sheetId}`);
     tbody.empty();
 
+    const closed =
+        (typeof window.isSetClosed === 'function' && window.isSetClosed()) ||
+        !!window.__SET_IS_CLOSED ||
+        (window.cycle && window.cycle.status === 'closed') ||
+        document.documentElement.classList.contains('is-cycle-closed');
+
     let serial = 1;
     let sumMaterial = 0;
     let sumShipping = 0;
@@ -1128,8 +1275,8 @@ function renderCustomerSheetRows(sheetId, entries) {
             `;
         }
 
-        const actionCell = `
-        <td class="border p-2">
+        const actionCell = !closed ? `
+        <td class="border p-2 text-center action-col" data-col="action">
             <div class="flex items-center justify-center gap-2">
             <button class="save-changes-btn hidden w-8 h-8 rounded bg-green-600 hover:bg-green-700 text-white"
                     data-id="${entry.id}" title="Save">
@@ -1158,7 +1305,9 @@ function renderCustomerSheetRows(sheetId, entries) {
                 <i class="bi bi-trash text-lg"></i>
             </button>
             </div>
-        </td>`;
+        </td>` : '';
+
+        const detailColspan = closed ? 6 : 7;
 
         // Create header row
         const $headerRow = $(`
@@ -1180,7 +1329,7 @@ function renderCustomerSheetRows(sheetId, entries) {
         // Create detail row with dynamic item table
         const $detailRow = $(`
             <tr class="detail-row relative hidden" data-new="true" data-id="${rowId}">
-                <td colspan="7" class="p-2 bg-gray-50">
+                <td colspan="${detailColspan}" class="p-2 bg-gray-50">
                     <div class="text-center font-bold text-xl mb-4 bg-blue-200 p-2">${entry.supplier}</div>
                     <div class="flex justify-center">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-16 w-full max-w-5xl mx-auto">
@@ -1195,8 +1344,8 @@ function renderCustomerSheetRows(sheetId, entries) {
                             <!-- Summary Right -->
                             <div class="space-y-2 border-4 border-zinc-500 p-5 bg-white">
                                 <div class="flex items-start gap-2"><span class="font-semibold w-56">Mode of Transaction:</span><input type="text" name="mode_of_transaction" class="flex-1 editable-input w-full rounded px-2 py-1 bg-white border border-gray-300 mode-of-transaction-input" placeholder="Enter Transaction Method" value="${mode}" /></div>
-                                <div class="flex items-start gap-2"><span class="font-semibold w-56">Receipt No:</span><textarea name="receipt_no" class="flex-1 dynamic-textarea w-full rounded px-2 py-1 bg-white border border-gray-300 resize-none overflow-hidden receipt-no-input" placeholder="Enter receipt numbers">${receipt}</textarea></div>
-                                <div class="flex items-start gap-2"><span class="font-semibold w-56">Remarks:</span><textarea name="remarks" class="flex-1 dynamic-textarea w-full rounded px-2 py-1 bg-white border border-gray-300 resize-none overflow-hidden remarks-input" placeholder="Enter Remarks">${remarks}</textarea></div>
+                                <div class="flex items-start gap-2"><span class="font-semibold w-56">Receipt No:</span><textarea name="receipt_no" class="flex-1 dynamic-textarea w-full rounded px-2 py-1 bg-white border border-gray-300 resize-none overflow-hidden whitespace-pre-wrap break-words leading-snug text-[13px] md:text-[14px] receipt-no-input" placeholder="Enter receipt numbers">${receipt}</textarea></div>
+                                <div class="flex items-start gap-2"><span class="font-semibold w-56">Remarks:</span><textarea name="remarks" class="flex-1 dynamic-textarea w-full rounded px-2 py-1 bg-white border border-gray-300 resize-none overflow-hidden whitespace-pre-wrap break-words leading-snug text-[13px] md:text-[14px] remarks-input" placeholder="Enter Remarks">${remarks}</textarea></div>
                             </div>
                         </div>
                     </div>
@@ -1330,11 +1479,28 @@ function renderCustomerSheetRows(sheetId, entries) {
         });
 
         tbody.append($headerRow).append($detailRow);
-        
+
+        const $rec = $detailRow.find('textarea.receipt-no-textarea, .receipt-no-input');
+        const $rem = $detailRow.find('textarea.remarks-textarea, .remarks-input');
+
+        // normalize + autosize
+        [$rec, $rem].forEach($t => {
+            const el = $t[0];
+            if (!el) return;
+            el.value = (el.value || '').trim();
+            el.style.height = 'auto';
+            window._autoSizeTA?.(el);        // grows only if needed
+        });
+
+        requestAnimationFrame(() => {
+            $detailRow.find('textarea.dynamic-textarea').each((_, el) => window._autoSizeTA?.(el));
+            _compactReceiptResize($detailRow);
+        });
+
         // seed originals for cost inputs (you already do this above; keep it)
         $detailRow.find('.dgd-input, .labour-input, .shipping-input')
-        .each(function () { $(this).data('orig', $(this).val() || '0'); });
-        
+            .each(function () { $(this).data('orig', $(this).val() || '0'); });
+
         recomputeShipping($detailRow, $headerRow);
 
         refreshAttachmentCount(entry.id, entry.customer_sheet_id);
@@ -1488,6 +1654,12 @@ function renderLoanLedgerRows(rows, sheetId) {
     const $body = $(`#loanLedgerBody-${sheetId}`);
     $body.empty();
 
+    const closed =
+        (typeof window.isSetClosed === 'function' && window.isSetClosed()) ||
+        !!window.__SET_IS_CLOSED ||
+        (window.cycle && window.cycle.status === 'closed') ||
+        document.documentElement.classList.contains('is-cycle-closed');
+
     let total = 0;
     rows.forEach((r, i) => {
         const amt = Number(r.amount || 0);
@@ -1495,22 +1667,25 @@ function renderLoanLedgerRows(rows, sheetId) {
 
         const formattedDate = formatFullDate(r.date);
 
+        const actionCell = !closed ? `
+            <td class="border p-2 text-center action-col" data-col="action">
+                <button class="loan-edit text-green-600 hover:text-green-800 has-tip mr-2"
+                        data-tippy-content="Edit Entry">
+                <i class="bi bi-pencil"></i>
+                </button>
+                <button class="loan-delete text-red-600 hover:text-red-800 has-tip"
+                        data-tippy-content="Delete Entry">
+                <i class="bi bi-trash"></i>
+                </button>
+            </td>` : '';
+
         $body.append(`
         <tr class="border-t" data-loan-id="${r.id}" data-sheet-id="${sheetId}" data-loan-date="${r.date}" data-loan-amount="${amt}">
             <td class="border p-2">${i + 1}</td>
             <td class="border p-2 whitespace-nowrap">${formattedDate}</td>
             <td class="border p-2">${escapeHtml(r.description || '')}</td>
             <td class="border p-2 text-right">${aed(amt)}</td>
-            <td class="border p-2 text-center">
-                <button class="loan-edit text-green-600 hover:text-green-800 has-tip mr-2"
-                        data-tippy-content="Edit Entry">
-                    <i class="bi bi-pencil"></i>
-                </button>
-                <button class="loan-delete text-red-600 hover:text-red-800 has-tip"
-                        data-tippy-content="Delete Entry">
-                    <i class="bi bi-trash"></i>
-                </button>
-            </td>
+            ${actionCell}
         </tr>
         `);
     });
@@ -1597,41 +1772,41 @@ function slugifyCustomerName(s) {
  * Call with: addCustomerSheetUI({ id, name });
  */
 function addCustomerSheetUI({ id, name }) {
-  if (!id || !name) return;
+    if (!id || !name) return;
 
-  const slug = slugifyCustomerName(name);
-  const key  = `customer-${slug}`;            // used by .sheet-tab click handler
-  const secId = `sheet-customer-${slug}`;     // container id for section
+    const slug = slugifyCustomerName(name);
+    const key = `customer-${slug}`;            // used by .sheet-tab click handler
+    const secId = `sheet-customer-${slug}`;     // container id for section
 
-  // --- De-dupe guards ---
-  // Already have a tab for this DB id?
-  if ($(`#customerTabsContainer .sheet-tab[data-sheet-id="${id}"]`).length) {
-    // ensure section exists; if not, we still fetch below
-  } else if ($(`#customerTabsContainer .sheet-tab[data-sheet="${key}"]`).length) {
-    // already have a tab for this slug/name; don't add another
-  } else {
-    // Add the tab exactly once
-    $('#customerTabsContainer').append(
-      `<button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100"
+    // --- De-dupe guards ---
+    // Already have a tab for this DB id?
+    if ($(`#customerTabsContainer .sheet-tab[data-sheet-id="${id}"]`).length) {
+        // ensure section exists; if not, we still fetch below
+    } else if ($(`#customerTabsContainer .sheet-tab[data-sheet="${key}"]`).length) {
+        // already have a tab for this slug/name; don't add another
+    } else {
+        // Add the tab exactly once
+        $('#customerTabsContainer').append(
+            `<button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100"
                data-sheet="${key}" data-sheet-id="${id}">
          ${name}
        </button>`
-    );
-  }
+        );
+    }
 
-  // Fetch the section HTML and inject (idempotent)
-  $.get(withCycle(`customer-sheet/section/${id}`))
-    .done(function (html) {
-      // remove any stale node with the same id, then insert fresh
-      $('#' + secId).remove();
-      const $node = $(html);
-      if (!$node.attr('id')) $node.attr('id', secId);
-      $node.addClass('sheet-section hidden');
-      $('#sheetContainer').append($node);
+    // Fetch the section HTML and inject (idempotent)
+    $.get(withCycle(`customer-sheet/section/${id}`))
+        .done(function (html) {
+            // remove any stale node with the same id, then insert fresh
+            $('#' + secId).remove();
+            const $node = $(html);
+            if (!$node.attr('id')) $node.attr('id', secId);
+            $node.addClass('sheet-section hidden');
+            $('#sheetContainer').append($node);
 
-      // switch to the tab; the global handler will persist active sheet
-      $(`.sheet-tab[data-sheet="${key}"]`).trigger('click');
-    });
+            // switch to the tab; the global handler will persist active sheet
+            $(`.sheet-tab[data-sheet="${key}"]`).trigger('click');
+        });
 }
 
 // Optional: expose to other scripts (summary page can call it directly)

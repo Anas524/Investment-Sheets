@@ -66,6 +66,39 @@ window._benPie = null;
 // honor the Materials server-lock from gts-totals.js
 window.__materialsLockedToServer = window.__materialsLockedToServer || false;
 
+// === Global AED formatter (3-digit grouping, US-style) ===
+(function (w) {
+    w.gtsFmt = w.gtsFmt || {};
+    if (!w.gtsFmt.numAE) {
+        w.gtsFmt.numAE = n =>
+            (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    if (!w.gtsFmt.aed) {
+        w.gtsFmt.aed = n => 'AED ' + w.gtsFmt.numAE(n);
+    }
+})(window);
+
+// Auto-resize any textarea with class .dynamic-textarea -this is for remarks
+(function attachAutoResize() {
+    const auto = (ta) => {
+        if (!ta) return;
+        ta.style.height = 'auto';
+        ta.style.height = ta.scrollHeight + 'px';
+    };
+
+    // Grow while typing
+    $(document).on('input', 'textarea.dynamic-textarea', function () { auto(this); });
+
+    // Grow at first focus (for rows injected later)
+    $(document).on('focus', 'textarea.dynamic-textarea', function () { auto(this); });
+
+    // Grow existing ones on load
+    $('textarea.dynamic-textarea').each(function () { auto(this); });
+
+    // expose for manual calls after you inject HTML
+    window._autoSizeTA = auto;
+})();
+
 function setActiveSheetBtn(sheet) {
     $('.sheet-tab').removeClass('active').attr('aria-current', 'false');
     $(`.sheet-tab[data-sheet="${sheet}"]`).addClass('active').attr('aria-current', 'page');
@@ -149,10 +182,12 @@ $(document).ready(function () {
         (window._legacyTimers || []).forEach(id => { try { clearInterval(id); } catch { } });
         window._legacyTimers = [];
 
-        // block legacy/global updaters on cycle pages
+        // ✅ only block true legacy writers, not the summary renderers
+        const BLOCK = new Set(['fetchAndUpdateInvestmentTotal']); // keep blocking this if you want
         ['loadCashInBreakdown', 'refreshLoanOutstandingHybrid', 'loadLoanOutstandingLegacy',
             'renderCashInBreakdown', 'renderLoanOutstanding', 'fetchAndUpdateInvestmentTotal']
             .forEach(function (name) {
+                if (!BLOCK.has(name)) return;
                 if (typeof window[name] === 'function') {
                     const orig = window[name];
                     window[name] = function () {
@@ -238,20 +273,18 @@ $(document).ready(function () {
             if (isCyclePage) {
                 // prevent legacy updaters from rewriting the cards
                 window._summaryLockedToCycle = true;
+                // kick the breakdown first so the user sees something instantly
+                if (typeof loadCashInBreakdown === 'function') loadCashInBreakdown({ dontTouchCards: true });
+
                 // cycle page → only fetch per-set numbers
                 if (typeof fetchAndRenderSummary === 'function') fetchAndRenderSummary();
-
-                // (Optional) still render the table, but don't let it touch the cards
-                if (typeof loadCashInBreakdown === 'function') loadCashInBreakdown({ dontTouchCards: true });
             } else {
                 // legacy/global behavior
                 loadCashInBreakdown();
                 fetchAndUpdateInvestmentTotal();
                 refreshLoanOutstandingHybrid();
             }
-            if (typeof paintSummaryFromServer === 'function') {
-                paintSummaryFromServer();
-            }
+            if (typeof paintSummaryFromServer === 'function') paintSummaryFromServer();
         } else if (sheet === 'beneficiary') {
             initBenLogic();
             loadBeneficiaries();
@@ -1016,33 +1049,49 @@ function loadUSClients() {
 }
 
 function renderUSClients(clients) {
-    const tbody = $('#us-client-body');
-    tbody.empty();
+    const tbody = $('#us-client-body').empty();
+
+    // closed/open?
+    const isClosed =
+        (typeof window.isSetClosed === 'function' && window.isSetClosed()) ||
+        !!window.__SET_IS_CLOSED ||
+        (window.cycle && window.cycle.status === 'closed') ||
+        document.documentElement.classList.contains('is-cycle-closed');
+
+    // Use the first-fetched baseline, else fall back to current list
+    const base = Array.isArray(window.originalUSClients) && window.originalUSClients.length
+        ? window.originalUSClients
+        : clients;
+
+    const indexMap = new Map(base.map((c, i) => [c.id, i + 1]));
 
     clients.forEach((item) => {
-        const originalIndex = originalUSClients.findIndex(c => c.id === item.id);
-        const srNo = originalIndex !== -1 ? originalIndex + 1 : '-';
+        const srNo = indexMap.get(item.id) ?? '-';
+
+        const actionCell = !isClosed ? `
+            <td class="w-24 action-col" data-col="action">
+                <button class="edit-us-btn px-2 py-1 text-sm rounded bg-green-600 hover:bg-green-700 text-white" title="Edit">
+                <i class="bi bi-pencil-square"></i>
+                </button>
+                <button class="delete-us-btn px-2 py-1 text-sm rounded bg-red-600 hover:bg-red-700 text-white" data-id="${item.id}" title="Delete">
+                <i class="bi bi-trash"></i>
+                </button>
+            </td>` : '';
+
+        const amt = Number(item.amount) || 0;
 
         const row = `
             <tr data-id="${item.id}" data-date="${formatDateISO(item.date)}">
                 <td class="w-5">${srNo}</td>
                 <td class="w-35">${formatDate(item.date)}</td>
-                <td class="format-aed w-32">AED ${parseFloat(item.amount).toFixed(2)}</td>
+                <td class="format-aed w-32">AED ${amt.toFixed(2)}</td>
                 <td class="w-40">${item.remarks || ''}</td>
-                <td class="w-24">
-                    <button class="edit-us-btn px-2 py-1 text-sm rounded bg-green-600 hover:bg-green-700 text-white" title="Edit">
-                        <i class="bi bi-pencil-square"></i>
-                    </button>
-
-                    <button class="delete-us-btn px-2 py-1 text-sm rounded bg-red-600 hover:bg-red-700 text-white" data-id="${item.id}" title="Delete">
-                        <i class="bi bi-trash"></i>
-                    </button>
-                </td>
+                ${actionCell}
             </tr>`;
         tbody.append(row);
     });
 
-    applyNumberFormatting();
+    if (typeof applyNumberFormatting === 'function') applyNumberFormatting();
 }
 
 // SQ Sheet Logic Initialization
@@ -1063,33 +1112,50 @@ function loadSQClients() {
 }
 
 function renderSQClients(clients) {
-    const tbody = $('#sq-client-body');
-    tbody.empty();
+    const tbody = $('#sq-client-body').empty();
+
+    // closed/open?
+    const isClosed =
+        (typeof window.isSetClosed === 'function' && window.isSetClosed()) ||
+        !!window.__SET_IS_CLOSED ||
+        (window.cycle && window.cycle.status === 'closed') ||
+        document.documentElement.classList.contains('is-cycle-closed');
+
+    // Use the first-fetched baseline, else fall back to current list
+    const base = Array.isArray(window.originalSQClients) && window.originalSQClients.length
+        ? window.originalSQClients
+        : clients;
+
+    const indexMap = new Map(base.map((c, i) => [c.id, i + 1]));
 
     clients.forEach((item) => {
-        const originalIndex = originalSQClients.findIndex(c => c.id === item.id);
-        const srNo = originalIndex !== -1 ? originalIndex + 1 : '-';
+        const srNo = indexMap.get(item.id) ?? '-';
+
+        const actionCell = !isClosed ? `
+                <td class="w-24 action-col" data-col="action">
+                    <button class="edit-sq-btn px-2 py-1 text-sm rounded bg-green-600 hover:bg-green-700 text-white" title="Edit">
+                        <i class="bi bi-pencil-square"></i>
+                    </button>
+    
+                    <button class="delete-sq-btn px-2 py-1 text-sm rounded bg-red-600 hover:bg-red-700 text-white" data-id="${item.id}" title="Delete">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </td>` : '';
+
+        const amt = Number(item.amount) || 0;
 
         const row = `
             <tr data-id="${item.id}" data-date="${formatDateISO(item.date)}">
                 <td class="w-5">${srNo}</td>
                 <td class="w-35">${formatDate(item.date)}</td>
-                <td class="format-aed w-32">AED ${parseFloat(item.amount).toFixed(2)}</td>
+                <td class="format-aed w-32">AED ${amt.toFixed(2)}</td>
                 <td class="w-40">${item.remarks || ''}</td>
-                <td class="w-24">
-                    <button class="edit-sq-btn px-2 py-1 text-sm rounded bg-green-600 hover:bg-green-700 text-white" title="Edit">
-                        <i class="bi bi-pencil-square"></i>
-                    </button>
-
-                    <button class="delete-sq-btn px-2 py-1 text-sm rounded bg-red-600 hover:bg-red-700 text-white" data-id="${item.id}" title="Delete">
-                        <i class="bi bi-trash"></i>
-                    </button>
-                </td>
+                ${actionCell}
             </tr>`;
         tbody.append(row);
     });
 
-    applyNumberFormatting();
+    if (typeof applyNumberFormatting === 'function') applyNumberFormatting();
 }
 
 function exportSQExcel() {
@@ -1123,10 +1189,16 @@ window.localItemsCache = window.localItemsCache || {};
 function renderLocalRows(rows) {
     const $body = $('#localSalesBody').empty();
 
+    const showActions =
+        !((typeof window.isSetClosed === 'function' && window.isSetClosed()) ||
+            !!window.__SET_IS_CLOSED ||
+            (window.cycle && window.cycle.status === 'closed') ||
+            document.documentElement.classList.contains('is-cycle-closed'));
+
     if (!rows || !rows.length) {
         $body.append(`<tr class="ls-empty">
-      <td colspan="6" class="px-3 py-3 text-gray-500">No rows yet.</td>
-    </tr>`);
+            <td colspan="${showActions ? 6 : 5}" class="px-3 py-3 text-gray-500">No rows yet.</td>
+        </tr>`);
         $('#localTotalSales').text('AED 0.00');
         $('#localTotalCount').text('0 records');
         initTippy();
@@ -1154,69 +1226,69 @@ function renderLocalRows(rows) {
 
         // If items are present inline, render them; else lazy-load placeholder
         let itemRowsHtml = `<tr class="ls-items-placeholder">
-        <td colspan="9" class="p-3 text-sm text-gray-500">Expand to load items…</td>
-      </tr>`;
+            <td colspan="9" class="p-3 text-sm text-gray-500">Expand to load items…</td>
+        </tr>`;
         if (Array.isArray(r.items)) {
             itemRowsHtml = buildEditableItemRowsHtml(r.items, pstat);
         }
 
-        // MASTER row
-        const $master = $(`
-      <tr class="group hover:bg-gray-50 master-row" data-id="${id}" data-date="${ymd}">
-        <td class="px-3 py-2 align-top">${i + 1}</td>
-        <td class="px-3 py-2 align-top">${dateUi}</td>
-        <td class="px-3 py-2 align-top">${client}</td>
-        <td class="px-3 py-2 align-top">${brief}</td>
-        <td class="px-3 py-2 align-top text-right font-semibold ls-total-cell">${fmtAED(rowInc)}</td>
-        <td class="px-3 py-2 align-top text-center actions-cell">
-          <div class="flex items-center justify-center gap-2">
+        const actionCell = showActions ? `
+        <td class="px-3 py-2 align-top text-center actions-cell action-col" data-col="action">
+            <div class="flex items-center justify-center gap-2">
             <button class="row-save px-2 py-1 text-sm rounded bg-green-600 hover:bg-green-700 text-white mr-2 hidden"
                     data-tippy-content="Save changes"><i class="bi bi-check2-circle"></i></button>
-
             <button class="ls-upload px-2 py-1 text-sm rounded bg-blue-500 hover:bg-blue-600 text-white"
                     data-id="${id}" data-tippy-content="Upload"><i class="bi-cloud-arrow-up-fill"></i></button>
-
             <button class="ls-view px-2 py-1 text-sm rounded bg-slate-700 hover:bg-slate-800 text-white"
                     data-id="${id}" data-tippy-content="View"><i class="bi bi-paperclip"></i></button>
-
             <button class="local-delete px-2 py-1 text-sm rounded bg-red-600 hover:bg-red-700 text-white"
                     data-id="${id}" data-tippy-content="Delete"><i class="bi bi-trash-fill"></i></button>
-          </div>
-        </td>
-      </tr>
-    `);
+            </div>
+        </td>` : '';
+
+        // MASTER row
+        const $master = $(`
+            <tr class="group hover:bg-gray-50 master-row" data-id="${id}" data-date="${ymd}">
+                <td class="px-3 py-2 align-top">${i + 1}</td>
+                <td class="px-3 py-2 align-top">${dateUi}</td>
+                <td class="px-3 py-2 align-top">${client}</td>
+                <td class="px-3 py-2 align-top">${brief}</td>
+                <td class="px-3 py-2 align-top text-right font-semibold ls-total-cell">${fmtAED(rowInc)}</td>
+                ${actionCell}
+            </tr>
+        `);
 
         // DETAIL row
         const $detail = $(`
-      <tr class="detail-row" data-parent="${id}">
-        <td colspan="6" class="pt-2 pb-4 bg-transparent">
-          <div class="ls-detail-wrapper overflow-hidden rounded-2xl border border-gray-200 shadow-sm">
-            <div class="px-4 py-2 bg-[#d7efff] border-b text-xs font-semibold text-gray-700 uppercase tracking-wider">Items</div>
-            <table class="w-full text-sm">
-              <thead class="text-gray-600">
-                <tr>
-                  <th class="px-4 py-3 text-left w-12">#</th>
-                  <th class="px-4 py-3 text-left min-w-[18rem]">Description</th>
-                  <th class="px-4 py-3 text-right w-28">No. of Units</th>
-                  <th class="px-4 py-3 text-right w-28">Unit Price</th>
-                  <th class="px-4 py-3 text-right w-36">Total w/o VAT</th>
-                  <th class="px-4 py-3 text-right w-28">VAT</th>
-                  <th class="px-4 py-3 text-right w-36">Total w/ VAT</th>
-                  <th class="px-4 py-3 text-center w-40">Payment</th>
-                  <th class="px-4 py-3 text-left min-w-[18rem]">Remarks</th>
-                </tr>
-              </thead>
-              <tbody class="ls-items-body divide-y divide-gray-100">
-                ${itemRowsHtml}
-              </tbody>
-            </table>
-            <div class="p-3">
-              <button class="add-item-btn mt-1 px-3 py-1 bg-blue-800 text-white rounded hover:bg-blue-900" data-target="${id}">+ Add Item</button>
-            </div>
-          </div>
-        </td>
-      </tr>
-    `).addClass('hidden'); // collapsed by default
+            <tr class="detail-row" data-parent="${id}">
+                <td colspan="${showActions ? 6 : 5}" class="pt-2 pb-4 bg-transparent">
+                <div class="ls-detail-wrapper overflow-hidden rounded-2xl border border-gray-200 shadow-sm">
+                    <div class="px-4 py-2 bg-[#d7efff] border-b text-xs font-semibold text-gray-700 uppercase tracking-wider">Items</div>
+                    <table class="w-full text-sm">
+                    <thead class="text-gray-600">
+                        <tr>
+                        <th class="px-4 py-3 text-left w-12">#</th>
+                        <th class="px-4 py-3 text-left min-w-[18rem]">Description</th>
+                        <th class="px-4 py-3 text-right w-28">No. of Units</th>
+                        <th class="px-4 py-3 text-right w-28">Unit Price</th>
+                        <th class="px-4 py-3 text-right w-36">Total w/o VAT</th>
+                        <th class="px-4 py-3 text-right w-28">VAT</th>
+                        <th class="px-4 py-3 text-right w-36">Total w/ VAT</th>
+                        <th class="px-4 py-3 text-center w-40">Payment</th>
+                        <th class="px-4 py-3 text-left min-w-[18rem]">Remarks</th>
+                        </tr>
+                    </thead>
+                    <tbody class="ls-items-body divide-y divide-gray-100">
+                        ${itemRowsHtml}
+                    </tbody>
+                    </table>
+                    <div class="p-3">
+                    <button class="add-item-btn mt-1 px-3 py-1 bg-blue-800 text-white rounded hover:bg-blue-900" data-target="${id}">+ Add Item</button>
+                    </div>
+                </div>
+                </td>
+            </tr>
+        `).addClass('hidden'); // collapsed by default
 
         $body.append($master, $detail);
 
@@ -2243,11 +2315,29 @@ function updateCashInBreakdown(data) {
 let _cashInBuildSeq = 0;
 let _ciLast = null;
 
-function loadCashInBreakdown() {
-    if (window.isCyclePage || window._summaryLockedToCycle) return;
-
+function loadCashInBreakdown(opts = {}) {
     if (!$('#sheet-summary').is(':visible')) return;
     const seq = ++_cashInBuildSeq;
+
+    // ---- FAST SEED: paint immediately from cache / in-memory ----
+    try {
+        const pickNum = (v) => Number(v) || 0;
+        const fromLS = (k) => {
+            try { return Number(localStorage.getItem(cycleKey(k))) || 0; } catch { return 0; }
+        };
+
+        const seed = {
+            us: { name: 'US Client Payment', material: pickNum(window.usTotal) || fromLS('usTotal') },
+            sq: { name: 'SQ Sheet', material: pickNum(window.sqTotal) || fromLS('sqTotal') },
+            local: { name: 'Local Sales', material: pickNum(window.localSalesTotal) || fromLS('localSalesTotal') },
+            customers: [] // we don’t have per-customer cache; fill when API returns
+        };
+
+        // If at least one has a value, paint right away so the user sees it instantly.
+        if ((seed.us.material || seed.sq.material || seed.local.material)) {
+            renderCashInBreakdown(seed);  // this also updates Cash-In KPI (allowed by your whitelist)
+        }
+    } catch { }
 
     // ALWAYS fetch fresh; fall back to cache only if the fetch fails
     const localUrl = (typeof investmentUrl === 'function')
@@ -2353,7 +2443,7 @@ window.updateMaterialTotals = function (material, shipping, opts = {}) {
         // Fallback (shouldn’t be used): just touch Summary if not locked
         window.sheetTotals = { ...(window.sheetTotals || {}), material: mat, shipping: ship };
         if (typeof renderSummaryFromGtsTotals === 'function' && !window.__summaryLocked) {
-            renderSummaryFromGtsTotals({ material: mat, shipping: ship, investment: Number(window.sheetTotals?.investment)||0 }, 'dom-fallback');
+            renderSummaryFromGtsTotals({ material: mat, shipping: ship, investment: Number(window.sheetTotals?.investment) || 0 }, 'dom-fallback');
         }
     }
 };
@@ -2964,20 +3054,14 @@ function fetchLoanOutstandingRows() {
 }
 
 function refreshLoanOutstandingHybrid() {
-    if (window.isCyclePage || window._summaryLockedToCycle) return;
+    if (!$('#sheet-summary').is(':visible')) return;
 
     fetchLoanOutstandingRows()
         .done(res => {
             const apiRows = Array.isArray(res?.rows) ? res.rows : [];
-            if (apiRows.length) {
-                renderLoanOutstanding(apiRows);
-            } else {
-                renderLoanOutstanding(collectLoanOutstandingFromDOM());
-            }
+            renderLoanOutstanding(apiRows.length ? apiRows : collectLoanOutstandingFromDOM());
         })
-        .fail(() => {
-            renderLoanOutstanding(collectLoanOutstandingFromDOM());
-        });
+        .fail(() => renderLoanOutstanding(collectLoanOutstandingFromDOM()));
 }
 
 (function (w) {
@@ -3007,6 +3091,7 @@ function unhideAncestors($el) {
 
 let benInited = false;
 let benFirstPaintDone = false;
+let __benAttachEntryId = null;
 
 function initBenLogic() {
     if (benInited) return;
@@ -3109,6 +3194,103 @@ function initBenLogic() {
         .on('click.benPieTab', '.sheet-tab[data-sheet="beneficiary"]', function () {
             $.when(loadBeneficiaries(), computeAndRenderProfit()).done(renderBenPieChart);
         });
+
+    $(document)
+        .off('click.ben', '.ben-edit, .ben-save, .ben-cancel, .ben-del')
+        .on('click.ben', '.ben-edit, .ben-save, .ben-cancel, .ben-del', function (e) {
+            if (benIsClosed()) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+        });
+
+    // open modal from action button
+    $(document)
+        .off('click.benAttach', '.ben-attach')
+        .on('click.benAttach', '.ben-attach', function () {
+            const id = $(this).closest('tr').data('id');
+            if (!id) return;
+            openBenAttachModal(id);
+        });
+
+    // close modal
+    $(document)
+        .off('click.benAttachClose', '#benAttachClose')
+        .on('click.benAttachClose', '#benAttachClose', closeBenAttachModal);
+
+    // ----- Upload handler (prevent empty) -----
+    $(document)
+        .off('submit.benAttach', '#benAttachForm')
+        .on('submit.benAttach', '#benAttachForm', function (e) {
+            e.preventDefault();
+            if (!__benAttachEntryId) return;
+
+            const files = $('#benAttFiles')[0]?.files;
+            if (!files || !files.length) return;  // no-op if nothing chosen
+
+            const api = benAttachApi(__benAttachEntryId);
+            const fd = new FormData(this);
+
+            // ensure files[] appended explicitly (keeps names)
+            fd.delete('files[]');
+            [...files].forEach(f => fd.append('files[]', f));
+
+            $.ajax({
+                url: api.store,
+                method: 'POST',
+                data: fd,
+                processData: false,
+                contentType: false,
+                headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
+            }).done(() => {
+                $('#benAttFiles').val('');
+                $('#benAttChosen').text('No file chosen');
+                benFetchAttachments(__benAttachEntryId);
+            }).fail(xhr => {
+                alert(xhr?.responseJSON?.message || 'Upload failed.');
+            });
+        });
+
+    // ----- Delete using your API helper -----
+    $(document)
+    .off('click.benAttachDel', '.ben-att-del')
+    .on('click.benAttachDel', '.ben-att-del', function () {
+        const id = $(this).data('id');
+        if (!id) return;
+        const api = benAttachApi(__benAttachEntryId || 0);
+        $.ajax({
+        url: api.del(id),
+        method: 'DELETE',
+        headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
+        }).done(() => {
+        if (__benAttachEntryId) benFetchAttachments(__benAttachEntryId);
+        }).fail(() => alert('Failed to delete attachment.'));
+    });
+
+    $(document)
+        .off('click.benAttBrowse', '#benAttBrowse')
+        .on('click.benAttBrowse', '#benAttBrowse', () => $('#benAttFiles').trigger('click'));
+
+    $(document)
+        .off('change.benAttFiles', '#benAttFiles')
+        .on('change.benAttFiles', '#benAttFiles', function () {
+            const names = [...(this.files || [])].map(f => f.name);
+            $('#benAttChosen').text(names.length ? names.join(', ') : 'No file chosen');
+        });
+
+    // backdrop click + ESC to close (optional but nice)
+    $(document)
+        .off('click.benAttachBackdrop')
+        .on('click.benAttachBackdrop', '#benAttachModal > .absolute.inset-0', closeBenAttachModal);
+
+    $(document)
+        .off('keydown.benAttachEsc')
+        .on('keydown.benAttachEsc', e => { if ($('#benAttachModal').is(':visible') && e.key === 'Escape') closeBenAttachModal(); });
+
+}
+
+function benIsClosed() {
+    return (typeof window.isSetClosed === 'function' && window.isSetClosed()) ||
+        !!window.__SET_IS_CLOSED ||
+        (window.cycle && window.cycle.status === 'closed') ||
+        document.documentElement.classList.contains('is-cycle-closed');
 }
 
 // ---------- small helpers ----------
@@ -3131,30 +3313,42 @@ function benDate(dStr) {
 // ---------- renderers ----------
 function renderBenTable($tbody, rows) {
     $tbody.empty();
+
+    const isClosed =
+        (typeof window.isSetClosed === 'function' && window.isSetClosed()) ||
+        !!window.__SET_IS_CLOSED ||
+        (window.cycle && window.cycle.status === 'closed') ||
+        document.documentElement.classList.contains('is-cycle-closed');
+
     if (!rows || rows.length === 0) {
         $tbody.append(`<tr><td colspan="7" class="px-4 py-4 text-center text-gray-500">No entries yet.</td></tr>`);
         return;
     }
     rows.forEach((r, i) => {
         const iso = r.date || ''; // keep raw ISO for editing
+
+        const actionCell = !isClosed ? `
+            <td class="px-4 py-3 text-center action-col" data-col="action">
+                <div class="flex items-center justify-center gap-2">
+                <button class="ben-attach p-1 rounded text-indigo-600 hover:bg-gray-100" title="Attachments"><i class="bi bi-paperclip"></i></button>
+                <button class="ben-edit p-1 rounded text-green-600 hover:bg-gray-100" title="Edit"><i class="bi bi-pencil-square"></i></button>
+                <button class="ben-save p-1 rounded bg-green-600 hover:bg-green-700 text-white hidden" title="Save"><i class="bi bi-check2"></i></button>
+                <button class="ben-cancel p-1 rounded bg-gray-600 hover:bg-gray-700 text-white hidden" title="Cancel"><i class="bi bi-x-lg"></i></button>
+                <button class="ben-del p-1 rounded hover:bg-red-50 text-red-600" title="Delete"><i class="bi bi-trash"></i></button>
+                </div>
+            </td>` : '';
+
         $tbody.append(`
-      <tr data-id="${r.id}" data-raw-date="${iso}" data-type="${(r.type || '').toLowerCase()}" data-charity="${r.charity || 0}">
-        <td class="px-4 py-3">${i + 1}</td>
-        <td class="px-4 py-3 ben-cell-date">${benEsc(benDate(iso))}</td>
-        <td class="px-4 py-3 ben-cell-type">${benTypeBadge(r.type)}</td>
-        <td class="px-4 py-3 text-right ben-cell-amount">${benFmtAED(Number(r.amount || 0))}</td>
-        <td class="px-4 py-3 text-right ben-cell-charity">${benFmtAED(Number(r.charity || 0))}</td>
-        <td class="px-4 py-3 ben-cell-remark">${benEsc(r.remarks || '')}</td>
-        <td class="px-4 py-3 text-center">
-          <div class="flex items-center justify-center gap-2">
-            <button class="ben-edit p-1 rounded text-green-600 hover:bg-gray-100" title="Edit"><i class="bi bi-pencil-square"></i></button>
-            <button class="ben-save p-1 rounded bg-green-600 hover:bg-green-700 text-white hidden" title="Save"><i class="bi bi-check2"></i></button>
-            <button class="ben-cancel p-1 rounded bg-gray-600 hover:bg-gray-700 text-white hidden" title="Cancel"><i class="bi bi-x-lg"></i></button>
-            <button class="ben-del p-1 rounded hover:bg-red-50 text-red-600" title="Delete"><i class="bi bi-trash"></i></button>
-          </div>
-        </td>
-      </tr>
-    `);
+            <tr data-id="${r.id}" data-raw-date="${iso}" data-type="${(r.type || '').toLowerCase()}" data-charity="${r.charity || 0}">
+                <td class="px-4 py-3">${i + 1}</td>
+                <td class="px-4 py-3 ben-cell-date">${benEsc(benDate(iso))}</td>
+                <td class="px-4 py-3 ben-cell-type">${benTypeBadge(r.type)}</td>
+                <td class="px-4 py-3 text-right ben-cell-amount">${benFmtAED(Number(r.amount || 0))}</td>
+                <td class="px-4 py-3 text-right ben-cell-charity">${benFmtAED(Number(r.charity || 0))}</td>
+                <td class="px-4 py-3 ben-cell-remark">${benEsc(r.remarks || '')}</td>
+                ${actionCell}
+            </tr>
+        `);
     });
 }
 
@@ -3259,7 +3453,7 @@ function enterBenEdit($tr) {
     const amountCh = Math.max(18, amountStr.length + 4);
     $tr.find('.ben-cell-amount').html(
         `<input type="number" step="0.01" inputmode="decimal"
-            class="ben-edit-amount ben-autosize-num w-autol border rounded-xl px-3 py-2 text-right
+            class="ben-edit-amount ben-autosize-num w-auto border rounded-xl px-3 py-2 text-right
                    focus:border-blue-500 focus:ring-2 focus:ring-blue-200" style="width:${amountCh}ch" value="${amountStr}">`
     );
 
@@ -3678,6 +3872,94 @@ function renderBenPieChart() {
     });
 }
 
+function benAttachApi(entryId) {
+    return {
+        list: `/beneficiaries/${entryId}/attachments`,
+        store: `/beneficiaries/${entryId}/attachments`,
+        del: (id) => `/beneficiaries/attachments/${id}`,
+        pdf: `/beneficiaries/${entryId}/attachments/download-all`,
+    };
+}
+
+// ----- Open modal / lock scroll -----
+function openBenAttachModal(entryId) {
+    __benAttachEntryId = entryId;
+    const api = benAttachApi(entryId);
+
+    $('#benAttachForm [name="entry_id"]').val(entryId);
+    $('#benAttachDownloadAll').attr('href', api.pdf);
+    $('#benAttachMeta').text(`Entry #${entryId}`);
+
+    $('#benAttachModal').removeClass('hidden').addClass('flex');
+    $('#benAttFiles').val('');        // reset file input
+    $('#benAttChosen').text('No file chosen');
+
+    const closed = benIsClosed();
+    $('#benAttachForm :input').prop('disabled', closed);
+    $('#benAttachForm').toggleClass('opacity-50 pointer-events-none', closed);
+
+    document.documentElement.classList.add('overflow-y-hidden');  // lock scroll
+    benFetchAttachments(entryId);
+}
+
+function closeBenAttachModal() {
+    __benAttachEntryId = null;
+    $('#benAttachModal').addClass('hidden').removeClass('flex');
+    $('#benAttachList').empty();
+    document.documentElement.classList.remove('overflow-y-hidden'); // unlock scroll
+}
+
+// ----- List + Open link -----
+function benFetchAttachments(entryId) {
+  const api = benAttachApi(entryId);
+  $('#benAttachList').html('<div class="py-6 text-center text-gray-500 text-sm">Loading…</div>');
+  $.getJSON(api.list, { _t: Date.now() }).done(res => {
+    const atts = res?.attachments || [];
+    if (!atts.length) {
+      $('#benAttachList').html('<div class="py-6 text-center text-gray-500 text-sm">No attachments yet.</div>');
+      return;
+    }
+    const fmtSize = (n) => {
+      n = Number(n) || 0;
+      if (n < 1024) return `${n} B`;
+      if (n < 1024*1024) return `${(n/1024).toFixed(1)} KB`;
+      return `${(n/1024/1024).toFixed(1)} MB`;
+    };
+
+    const rows = atts.map(a => {
+      const type = (a.type || 'other');
+      const url  = a.path ? `/storage/${a.path}` : (a.url || null); // prefer public storage
+      return `
+        <div class="flex items-center gap-3 py-3">
+          <span class="inline-flex text-xs px-2 py-0.5 rounded-full ${pillClass(type)}">
+            ${type[0].toUpperCase() + type.slice(1)}
+          </span>
+          <div class="flex-1 min-w-0">
+            <div class="truncate text-sm text-slate-800">${escapeHtml(a.original_name || 'file')}</div>
+            <div class="text-xs text-slate-500">${fmtSize(a.size)}${a.mime ? ' • ' + escapeHtml(a.mime) : ''}</div>
+          </div>
+          ${url ? `<a href="${url}" target="_blank" rel="noopener" class="text-indigo-600 hover:underline text-sm">Open</a>` : ''}
+          ${benIsClosed() ? '' : `<button class="ben-att-del text-red-600 hover:bg-red-50 rounded px-2 py-1 text-sm" data-id="${a.id}"><i class="bi bi-trash"></i></button>`}
+        </div>
+      `;
+    }).join('');
+    $('#benAttachList').html(rows);
+  }).fail(() => {
+    $('#benAttachList').html('<div class="py-6 text-center text-red-600 text-sm">Failed to load attachments.</div>');
+  });
+}
+
+function pillClass(t) {
+    switch ((t || 'other').toLowerCase()) {
+        case 'invoice': return 'bg-blue-100 text-blue-800';
+        case 'receipt': return 'bg-green-100 text-green-800';
+        case 'note': return 'bg-orange-100 text-orange-800';
+        default: return 'bg-slate-100 text-slate-700';
+    }
+}
+
+function escapeHtml(s) { return String(s || '').replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c])); }
+
 // ---- Customer sheet tab rendering (inline or dropdown) ----
 
 function getCustomerSheetsFromDOM() {
@@ -3915,4 +4197,156 @@ function paintInvestmentCardOnce(total) {
         const t = (ev && ev.detail) ? ev.detail : (window.sheetTotals || {});
         paintInvestmentCardOnce(Number(t.investment) || 0);
     });
+})();
+
+(function () {
+    function isClosed() {
+        return !!window.__SET_IS_CLOSED ||
+            (window.cycle && window.cycle.status === 'closed') ||
+            document.documentElement.classList.contains('is-cycle-closed');
+    }
+
+    function hardFixTables(root) {
+        if (!isClosed()) return;
+
+        (root || document).querySelectorAll('table').forEach(table => {
+            // Remove Tailwind's fixed layout so columns can stretch
+            table.classList.remove('table-fixed');
+            table.style.tableLayout = 'auto';
+
+            const thead = table.tHead || table.querySelector('thead');
+            if (!thead) return;
+
+            // Last header row is what browsers use for column count
+            const headerRow = thead.querySelector('tr:last-child');
+            if (!headerRow) return;
+
+            let ths = Array.from(headerRow.querySelectorAll('th'));
+            if (!ths.length) return;
+
+            // Try to locate the Action column; if not found, DO NOTHING (never guess)
+            let actionIdx = ths.findIndex(th =>
+                /action/i.test((th.textContent || '').trim()) ||
+                th.matches('.action, .action-col, [data-col="action"]')
+            );
+            if (actionIdx === -1) {
+                // We couldn't positively identify the Action column—leave the table alone.
+                return;
+            }
+
+            // Remove the Action header cell from *every* header row so counts line up
+            thead.querySelectorAll('tr').forEach(tr => {
+                const cells = tr.children;
+                if (cells[actionIdx]) tr.removeChild(cells[actionIdx]);
+            });
+
+            // Remove matching <col> if there’s a colgroup
+            const cg = table.querySelector('colgroup');
+            if (cg && cg.children[actionIdx]) cg.removeChild(cg.children[actionIdx]);
+
+            // Remove the Action cell from every body/footer row
+            table.querySelectorAll('tbody tr, tfoot tr').forEach(tr => {
+                const cells = tr.children;
+                if (cells[actionIdx]) tr.removeChild(cells[actionIdx]);
+            });
+
+            // New visible header count
+            const newHeadCount = (table.tHead || table.querySelector('thead'))
+                .querySelectorAll('tr:last-child th').length;
+
+            // Clamp over-large colspans to the new width
+            table.querySelectorAll('tbody td[colspan], tfoot td[colspan], tbody th[colspan], tfoot th[colspan]')
+                .forEach(cell => {
+                    let span = parseInt(cell.getAttribute('colspan') || '1', 10);
+                    if (!Number.isFinite(span) || span < 1) span = 1;
+                    if (span > newHeadCount) cell.setAttribute('colspan', String(newHeadCount));
+                });
+
+            // If any row still visually overflows (rare), drop trailing cells until it fits
+            const fitRow = (tr) => {
+                let visual = 0;
+                const cells = Array.from(tr.children);
+                for (const td of cells) {
+                    const s = parseInt(td.getAttribute('colspan') || '1', 10);
+                    visual += (Number.isFinite(s) && s > 0) ? s : 1;
+                }
+                while (visual > newHeadCount && tr.lastElementChild) {
+                    const last = tr.lastElementChild;
+                    const s = parseInt(last.getAttribute('colspan') || '1', 10);
+                    tr.removeChild(last);
+                    visual -= (Number.isFinite(s) && s > 0) ? s : 1;
+                }
+            };
+            table.querySelectorAll('tbody tr, tfoot tr').forEach(fitRow);
+        });
+    }
+
+    function squashRightGutter(root) {
+        (root || document).querySelectorAll('table').forEach(table => {
+            // ensure fluid layout
+            table.classList.remove('table-fixed');
+            table.style.tableLayout = 'auto';
+            table.style.borderCollapse = 'collapse';
+            table.style.borderSpacing = '0';
+            table.style.width = '100%';
+
+            // clear any fixed widths that keep a sliver on right
+            table.querySelectorAll('colgroup col, thead th, tbody td, tfoot td').forEach(el => {
+                el.style.width = '';
+                el.removeAttribute('width');
+            });
+
+            const thead = table.tHead || table.querySelector('thead');
+            const headerRow = thead && thead.querySelector('tr:last-child');
+            if (!headerRow) return;
+
+            const visibleThs = Array.from(headerRow.querySelectorAll('th')).filter(th => th.offsetParent !== null);
+            if (!visibleThs.length) return;
+
+            const lastTh = visibleThs[visibleThs.length - 1];
+            const wrapper = table.parentElement || table;
+
+            // if wrapper is wider than table, pad the last visible column to eat the gap
+            const gap = (wrapper.clientWidth || wrapper.offsetWidth) - table.offsetWidth;
+            if (gap > 0) {
+                const pr = parseFloat(getComputedStyle(lastTh).paddingRight) || 0;
+                lastTh.style.paddingRight = (pr + gap) + 'px';
+
+                const lastIndex = Array.from(headerRow.children).indexOf(lastTh);
+                table.querySelectorAll('tbody tr').forEach(tr => {
+                    const cell = tr.children[lastIndex];
+                    if (cell) {
+                        const cpr = parseFloat(getComputedStyle(cell).paddingRight) || 0;
+                        cell.style.paddingRight = (cpr + gap) + 'px';
+                    }
+                });
+            }
+        });
+    }
+
+    function applyClosedLock(root) {
+        if (!isClosed()) return;
+        document.documentElement.classList.add('is-cycle-closed');
+        hardFixTables(root);          // removes Action col + clamps colspans
+        squashRightGutter(root);      // removes the tiny right-side gap
+    }
+
+    // initial + future DOM
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => applyClosedLock(document));
+    } else {
+        applyClosedLock(document);
+    }
+
+    const mo = new MutationObserver(muts => {
+        if (!isClosed()) return;
+        for (const m of muts) {
+            m.addedNodes && m.addedNodes.forEach(n => {
+                if (n.nodeType === 1) applyClosedLock(n);
+            });
+        }
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+
+    document.addEventListener('sheet:rendered', () => applyClosedLock(document));
 })();

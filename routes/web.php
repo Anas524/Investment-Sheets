@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\BeneficiaryAttachmentController;
 use App\Http\Controllers\BeneficiaryController;
 use App\Http\Controllers\CustomerLoanLedgerController;
 use App\Http\Controllers\CustomerSheetAttachmentController;
@@ -141,6 +142,11 @@ Route::prefix('beneficiaries')->group(function () {
     Route::post('/',           [BeneficiaryController::class, 'store']);    // add one
     Route::delete('/{id}',     [BeneficiaryController::class, 'destroy']);  // delete one
     Route::put('/{id}',        [BeneficiaryController::class, 'update']);   // edit and update
+
+    Route::get('{entry}/attachments/download-all', [BeneficiaryAttachmentController::class, 'downloadAll'])->name('beneficiaries.attach.downloadAll');
+    Route::get('{entry}/attachments',           [BeneficiaryAttachmentController::class, 'index'])->name('beneficiaries.attach.index');
+    Route::post('{entry}/attachments',          [BeneficiaryAttachmentController::class, 'store'])->name('beneficiaries.attach.store');
+    Route::delete('attachments/{id}',           [BeneficiaryAttachmentController::class, 'destroy'])->name('beneficiaries.attach.destroy');
 });
 
 
@@ -156,6 +162,8 @@ Route::prefix('cycles')->group(function () {
     Route::post('/',              [CycleController::class, 'store'])->name('cycles.store');
     Route::post('{cycle}/close',  [CycleController::class, 'close'])->name('cycles.close');
     Route::post('{cycle}/reopen', [CycleController::class, 'reopen'])->name('cycles.reopen');
+
+    Route::delete('{cycle}', [CycleController::class, 'destroy'])->name('cycles.destroy');
 });
 
 Route::prefix('c/{cycle}')

@@ -6,6 +6,7 @@ use App\Models\Cycle;
 use App\Models\USClient;
 use App\Services\CycleMetricService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
 
 class CycleController extends Controller
 {
@@ -13,7 +14,9 @@ class CycleController extends Controller
 
     public function index()
     {
-        $cycles = Cycle::orderByDesc('id')->get();
+        $cycles = Cycle::orderBy('created_at', 'asc')
+               ->orderBy('id', 'asc')
+               ->get();
         return view('cycles.index', compact('cycles'));
     }
 
@@ -38,7 +41,7 @@ class CycleController extends Controller
             $snap['us_last_amount'] = (float) ($last->amount ?? 0);
             // if 'date' is a Carbon date column this yields "YYYY-MM-DD"
             $snap['us_last_date']   = optional(optional($last)->date)->toDateString()
-                                   ?? ($last->date ?? null);
+                ?? ($last->date ?? null);
 
             $out[$id] = $snap;
         }
@@ -56,15 +59,40 @@ class CycleController extends Controller
 
         $data['status'] = 'open';
 
+        // --- simple de-dupe guard (prevents accidental doubles on retry) ---
+        $existing = Cycle::where('name', $data['name'])
+            ->whereNull('deleted_at') // ignore soft-deleted cycles
+            ->first();
+
+        if ($existing) {
+            if ($request->ajax() || $request->expectsJson()) {
+                return response()->json(['id' => $existing->id, 'cycle' => $existing], 200);
+            }
+            return $this->redirectToCycle($existing);
+        }
+
         $cycle = Cycle::create($data);
 
-        // Your JS expects JSON with an id (and may redirect itself)
-        if ($request->wantsJson()) {
+        // --- AJAX/JSON callers (your JS) ---
+        if ($request->ajax() || $request->expectsJson()) {
             return response()->json(['id' => $cycle->id, 'cycle' => $cycle], 201);
         }
 
-        // jump straight into the cycle screen
-        return redirect()->route('cycles.investments.page', $cycle);
+        // --- Non-AJAX: redirect to the set screen ---
+        return $this->redirectToCycle($cycle);
+    }
+
+    /** Keep route name differences (local vs live) out of the action logic */
+    protected function redirectToCycle(Cycle $cycle)
+    {
+        if (Route::has('investment.cycles.investments.page')) {
+            return redirect()->route('investment.cycles.investments.page', $cycle);
+        }
+        if (Route::has('cycles.investments.page')) {
+            return redirect()->route('cycles.investments.page', $cycle);
+        }
+        // final fallback
+        return redirect()->to("/investment/c/{$cycle->id}/investments");
     }
 
     public function close(Cycle $cycle)
@@ -119,5 +147,14 @@ class CycleController extends Controller
             $out[$id] = $snap; // contains cash_in/out/profit + local/sq/us/customers/material/shipping/investment
         }
         return response()->json($out);
+    }
+
+    public function destroy(Cycle $cycle)
+    {
+        // soft delete (requires SoftDeletes on the model)
+        $cycle->delete();
+
+        // Return JSON for AJAX
+        return response()->json(['ok' => true]);
     }
 }

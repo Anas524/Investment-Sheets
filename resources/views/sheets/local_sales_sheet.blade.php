@@ -1,3 +1,5 @@
+@php($isClosed = $isClosed ?? (isset($cycle) && ($cycle->status ?? null) === 'closed'))
+
 <div id="local-sales-root">
     <input type="hidden" class="local-sheet-flag" value="1" />
 
@@ -28,7 +30,9 @@
                     <th class="px-3 py-3 text-left">Client</th>
                     <th class="px-3 py-3 text-left">Brief Description</th>
                     <th class="px-3 py-3 text-right">Total Amount</th>
-                    <th class="px-3 py-3 text-center">Actions</th>
+                    @unless($isClosed)
+                        <th class="px-3 py-3 text-center action-col" data-col="action">Actions</th>
+                    @endunless
                 </tr>
             </thead>
             <tbody id="localSalesBody" class="divide-y divide-gray-100"></tbody>

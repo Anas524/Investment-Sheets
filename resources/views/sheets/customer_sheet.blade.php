@@ -1,3 +1,5 @@
+@php($isClosed = $isClosed ?? (isset($cycle) && ($cycle->status ?? null) === 'closed'))
+
 <div id="sheet-customer-{{ strtolower($sheetName) }}" class="sheet-section" style="display:none" data-sheet-name="{{ strtoupper($sheetName) }}">
   <input type="hidden" class="customer-sheet-id" id="customer-sheet-id-{{ $sheetId }}" value="{{ $sheetId }}">
   <div class="p-6">
@@ -35,7 +37,9 @@
             <th class="border p-2 w-32">Brief Description</th>
             <th class="border p-2 w-32">Total Material</th>
             <th class="border p-2 w-32">Total Shipping Cost</th>
-            <th class="border p-2 w-24">Action</th>
+            @unless($isClosed)
+              <th class="border p-2 w-24 action-col" data-col="action">Action</th>
+            @endunless
           </tr>
         </thead>
         <tbody class="customer-table-body" id="customerTableBody-{{ $sheetId }}" data-sheet="customer-{{ $sheetId }}">
@@ -85,7 +89,9 @@
               <th class="border p-2 w-36">Date</th>
               <th class="border p-2">Description</th>
               <th class="border p-2 w-40 text-right">Amount (AED)</th>
-              <th class="border p-2 w-28">Action</th>
+              @unless($isClosed)
+                <th class="border p-2 w-28 action-col" data-col="action">Action</th>
+              @endunless
             </tr>
           </thead>
           <tbody id="loanLedgerBody-{{ $sheetId }}">

@@ -24,41 +24,6 @@
       </div>
     </div>
 
-    {{-- Create & Open Modal --}}
-    <div id="createSetModal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
-      <div class="bg-white rounded-2xl w-full max-w-lg shadow-xl p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold">Create & Open Set</h2>
-          <button id="closeCreateSetModal" class="text-gray-500 hover:text-gray-700 text-xl leading-none">&times;</button>
-        </div>
-
-        <form id="createSetForm" class="space-y-4">
-          @csrf
-          <div>
-            <label class="block text-sm font-medium mb-1">Set name</label>
-            <input name="name" required class="w-full px-3 py-2 rounded border" placeholder="e.g., March 2025" />
-          </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="block text-sm font-medium mb-1">From</label>
-              <input type="date" name="date_from" class="w-full px-3 py-2 rounded border" />
-            </div>
-            <div>
-              <label class="block text-sm font-medium mb-1">To (optional)</label>
-              <input type="date" name="date_to" class="w-full px-3 py-2 rounded border" />
-            </div>
-          </div>
-
-          <div class="flex items-center justify-end gap-3 pt-2">
-            <button type="button" id="cancelCreateSetBtn" class="px-4 py-2 rounded border">Cancel</button>
-            <button type="submit" class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700">
-              Create & Open
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-
     {{-- Sets grid --}}
     <div id="cycleGrid" class="grid grid-cols-1 md:grid-cols-2 gap-5"></div>
 
@@ -109,6 +74,8 @@
             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
           }
         });
+
+        let __creatingSet = false;
 
         const CYCLES_STORE_URL = "{{ route('cycles.store') }}";
         const KPIS_URL = "{{ route('cycles.kpis') }}";
@@ -174,7 +141,77 @@
           }
         }
 
-        function renderCard(set, kpis) {
+        // Two-step delete (global)
+        let pendingDeleteId = null;
+
+        $(document).on('click', '.openDelete1', function () {
+          pendingDeleteId = $(this).data('id');
+          openModal('confirmDelete1');
+        });
+
+        $(document).on('click', '.cancelDel1', function () {
+          closeModal('confirmDelete1', () => { pendingDeleteId = null; });
+        });
+
+        $(document).on('click', '.okDel1', function () {
+          // animate step-1 out, then step-2 in
+          closeModal('confirmDelete1', () => openModal('confirmDelete2'));
+        });
+
+        $(document).on('click', '.cancelDel2', function () {
+          closeModal('confirmDelete2', () => { pendingDeleteId = null; });
+        });
+
+        $(document).on('click', '.okDel2', function () {
+          if (!pendingDeleteId) return;
+
+          $.ajax({
+            url: `/cycles/${pendingDeleteId}`,
+            method: 'DELETE',
+            headers: { 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content }
+          })
+          .done(() => {
+            window._cycles = (window._cycles || []).filter(c => Number(c.id) !== Number(pendingDeleteId));
+            closeModal('confirmDelete2');
+            pendingDeleteId = null;
+            if (typeof initGrid === 'function') initGrid();
+          })
+          .fail(xhr => {
+            alert('Delete failed');
+            console.error(xhr?.responseText || xhr);
+          });
+        });
+
+        // “More” menu (global)
+        $(document).on('click', '.moreBtn', function (e) {
+          e.stopPropagation();
+          const $menu = $(this).siblings('.moreMenu');
+
+          // hide any other open menus
+          $('.moreMenu').not($menu)
+            .addClass('hidden translate-x-2 opacity-0')
+            .removeClass('translate-x-0 opacity-100');
+
+          // toggle this one with animation
+          if ($menu.hasClass('hidden')) {
+            $menu.removeClass('hidden');
+            // next frame to allow transition to play
+            requestAnimationFrame(() => {
+              $menu.removeClass('translate-x-2 opacity-0').addClass('translate-x-0 opacity-100');
+            });
+          } else {
+            $menu.addClass('translate-x-2 opacity-0').removeClass('translate-x-0 opacity-100');
+            setTimeout(() => $menu.addClass('hidden'), 150); // match duration-150 above
+          }
+        });
+
+        $(document).on('click', function () {
+          $('.moreMenu')
+            .addClass('hidden translate-x-2 opacity-0')
+            .removeClass('translate-x-0 opacity-100');
+        });
+
+        function renderCard(set, kpis, seq) {
           const id = set.id;
           const name = set.name || `#${id}`;
           const from = set.date_from || null;
@@ -200,6 +237,39 @@
           const openUrl = (window.OPEN_INVEST_URL_TMPL || '/c/ID_PLACEHOLDER/investments')
             .replace('ID_PLACEHOLDER', String(id)) + '?tab=summary';
 
+          /* actions */
+          const actionsHtml = `
+            <div class="px-5 pt-4 flex items-center justify-between relative">
+              <div class="text-sm text-gray-500">Set ${seq}</div>
+              <div class="flex items-center gap-2">
+                <a href="${openUrl}" class="${openBtnCl}">Open screen</a>
+                ${isOpen
+                  ? `<button class="closeSetBtn ${closeBtnCl}" data-id="${id}">Close</button>`
+                  : `<button class="reopenSetBtn ${closeBtnCl}" data-id="${id}">Reopen</button>`}
+                <div class="relative">
+                  <!-- Ellipsis button (no "More" text) -->
+                  <button
+                    class="moreBtn h-8 w-9 grid place-items-center border rounded text-lg leading-none hover:bg-gray-50"
+                    type="button"
+                    aria-label="More actions"
+                    title="More actions"
+                  >⋯</button>
+
+                  <!-- Menu slides in from the right -->
+                  <div
+                    class="moreMenu absolute right-0 mt-1 w-36 bg-white shadow rounded border hidden z-10
+                          transform transition duration-150 ease-out translate-x-2 opacity-0"
+                  >
+                    <button
+                      class="openDelete1 w-full text-left px-3 py-2 text-red-600 hover:bg-red-50"
+                      data-id="${id}"
+                    >Delete…</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+
           const $card = $(`
           <div class="rounded-2xl border bg-white shadow-sm p-0 overflow-hidden">
             <!-- header strip with status-based gradient -->
@@ -217,16 +287,7 @@
               </div>
             </div>
 
-            <!-- actions -->
-            <div class="px-5 pt-4 flex items-center justify-between">
-              <div class="text-sm text-gray-500">Set #${id}</div>
-              <div class="flex items-center gap-2">
-                <a href="${openUrl}" class="${openBtnCl}">Open screen</a>
-                ${isOpen
-                  ? `<button class="closeSetBtn ${closeBtnCl}" data-id="${id}">Close</button>`
-                  : `<button class="reopenSetBtn ${closeBtnCl}" data-id="${id}">Reopen</button>`}
-              </div>
-            </div>
+            ${actionsHtml}
 
             <!-- KPIs: force 2×2 grid on all breakpoints -->
             <div class="p-5 grid grid-cols-2 gap-3">
@@ -317,7 +378,13 @@
           showGridMessage('Loading…');
 
           const list = Array.isArray(window._cycles) ? window._cycles.slice() : [];
-          list.sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0));
+          list.sort((a, b) => {
+            const ad = new Date(a.created_at || 0).getTime() || 0;
+            const bd = new Date(b.created_at || 0).getTime() || 0;
+            if (ad !== bd) return ad - bd;
+            return (Number(a.id) || 0) - (Number(b.id) || 0);
+          });
+
           const ids = list.map(x => x.id);
 
           fetchAllKpis(ids).done(kpis => {
@@ -326,7 +393,7 @@
               showGridMessage('No sets yet.');
               return;
             }
-            list.forEach(set => $grid.append(renderCard(set, kpis)));
+            list.forEach((set, i) => $grid.append(renderCard(set, kpis, i + 1))); // i+1 => 1..N
           }).fail(() => {
             // Friendly error + retry
             $grid.html(`
@@ -341,18 +408,58 @@
           });
         }
 
-        // Modal wiring
-        $('#openCreateSetBtn').on('click', () => $('#createSetModal').removeClass('hidden').addClass('flex'));
+        // OPEN (button exists up front)
+        $('#openCreateSetBtn').on('click', () => openModal('createSetModal'));
 
-        function closeModal() {
-          $('#createSetModal').addClass('hidden').removeClass('flex');
-          $('#createSetForm')[0].reset();
+        // CLOSE (delegated so it works even if the node isn't in DOM yet)
+        $(document).on('click', '#closeCreateSetModal, #cancelCreateSetBtn', function () {
+          closeModal('createSetModal');
+        });
+
+        function openModal(id) {
+          const $m = $('#' + id);
+          const $panel = $m.find('.modal-panel');
+
+          document.body.classList.add('overflow-hidden');
+
+          $m.removeClass('hidden').addClass('flex');
+          // next frame to let the browser apply display changes
+          requestAnimationFrame(() => {
+            $m.removeClass('opacity-0').addClass('opacity-100');
+            $panel.removeClass('opacity-0 scale-95').addClass('opacity-100 scale-100');
+          });
         }
-        $('#closeCreateSetModal, #cancelCreateSetBtn').on('click', closeModal);
+
+        function closeModal(id, after) {
+          const $m = $('#' + id);
+          const $panel = $m.find('.modal-panel');
+
+          // animate out
+          $m.removeClass('opacity-100').addClass('opacity-0');
+          $panel.removeClass('opacity-100 scale-100').addClass('opacity-0 scale-95');
+
+          // match duration-200
+          setTimeout(() => {
+            $m.addClass('hidden').removeClass('flex');
+            document.body.classList.remove('overflow-hidden');
+            if (typeof after === 'function') after();
+          }, 200);
+        }
 
         // Create & Open
-        $('#createSetForm').on('submit', function(e) {
+        $(document).on('submit', '#createSetForm', function (e) {
           e.preventDefault();
+
+          if (__creatingSet) return; // stop double submit
+          __creatingSet = true;
+
+          const $form = $(this);
+          const $btn  = $form.find('button[type="submit"]');
+          const orig  = $btn.text();
+          $btn.prop('disabled', true)
+              .addClass('opacity-50 cursor-not-allowed')
+              .text('Creating…');
+
           const fd = new FormData(this);
           $.ajax({
               url: CYCLES_STORE_URL,
@@ -366,15 +473,20 @@
               if (id) {
                 const openUrl = (window.OPEN_INVEST_URL_TMPL || '/c/ID_PLACEHOLDER/investments')
                   .replace('ID_PLACEHOLDER', String(id));
-                location.href = openUrl;
+                window.location.replace(openUrl);
                 return;
               }
-              closeModal();
-              initGrid(); // refresh grid if backend didn’t redirect
+              closeModal('createSetModal');
+              if (typeof initGrid === 'function') initGrid();
             })
             .fail(xhr => {
               alert('Create failed');
               console.error(xhr?.responseText || xhr);
+              // let the user try again
+              __creatingSet = false;
+              $btn.prop('disabled', false)
+                  .removeClass('opacity-50 cursor-not-allowed')
+                  .text(orig);
             });
         });
 
@@ -382,6 +494,69 @@
         $(initGrid);
       })();
     </script>
+  </div>
+
+  {{-- Create & Open Modal --}}
+  <div id="createSetModal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50 transition-opacity duration-200 opacity-0">
+    <div class="modal-panel bg-white rounded-2xl w-full max-w-lg shadow-xl p-6 transform transition duration-200 opacity-0 scale-95">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold">Create & Open Set</h2>
+        <button id="closeCreateSetModal" class="text-gray-500 hover:text-gray-700 text-xl leading-none">&times;</button>
+      </div>
+
+      <form id="createSetForm" class="space-y-4">
+        @csrf
+        <div>
+          <label class="block text-sm font-medium mb-1">Set name</label>
+          <input name="name" required class="w-full px-3 py-2 rounded border" placeholder="e.g., March 2025" />
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium mb-1">From</label>
+            <input type="date" name="date_from" class="w-full px-3 py-2 rounded border" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">To (optional)</label>
+            <input type="date" name="date_to" class="w-full px-3 py-2 rounded border" />
+          </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3 pt-2">
+          <button type="button" id="cancelCreateSetBtn" class="px-4 py-2 rounded border">Cancel</button>
+          <button type="submit" class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700">
+            Create & Open
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Delete step 1 -->
+  <div id="confirmDelete1" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50 transition-opacity duration-200 opacity-0">
+    <div class="modal-panel bg-white rounded-2xl w-full max-w-sm shadow-xl p-6 transform transition duration-200 opacity-0 scale-95">
+      <h3 class="text-lg font-semibold mb-2">Delete this set?</h3>
+      <p class="text-sm text-gray-600 mb-5">
+        This will remove the set from your dashboard.
+      </p>
+      <div class="flex justify-end gap-2">
+        <button class="cancelDel1 px-4 py-2 rounded border">Cancel</button>
+        <button class="okDel1 px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700">Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete step 2 -->
+  <div id="confirmDelete2" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50 transition-opacity duration-200 opacity-0">
+    <div class="modal-panel bg-white rounded-2xl w-full max-w-sm shadow-xl p-6 transform transition duration-200 opacity-0 scale-95">
+      <h3 class="text-lg font-semibold mb-2">Confirm delete</h3>
+      <p class="text-sm text-gray-600 mb-5">
+        This action can’t be undone. Delete this set?
+      </p>
+      <div class="flex justify-end gap-2">
+        <button class="cancelDel2 px-4 py-2 rounded border">Cancel</button>
+        <button class="okDel2 px-4 py-2 rounded bg-red-700 text-white hover:bg-red-800">Yes, delete</button>
+      </div>
+    </div>
   </div>
 
 </body>

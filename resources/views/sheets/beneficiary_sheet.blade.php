@@ -1,3 +1,5 @@
+@php($isClosed = $isClosed ?? (isset($cycle) && ($cycle->status ?? null) === 'closed'))
+
 <div class="space-y-6">
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
     <!-- Total Profit -->
@@ -17,7 +19,7 @@
       </div>
     </div>
   </div>
-  
+
   <!-- Three KPI cards -->
   <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
     <div class="bg-white rounded-2xl shadow p-4 border-l-4 border-amber-500">
@@ -143,7 +145,9 @@
               <th class="px-4 py-3 text-right">Amount</th>
               <th class="px-4 py-3 text-right">Charity</th>
               <th class="px-4 py-3 text-left">Remark</th>
-              <th class="px-4 py-3 text-center w-24">Action</th>
+              @unless ($isClosed)
+              <th class="px-4 py-3 text-center w-24 action-col" data-col="action">Action</th>
+              @endunless
             </tr>
           </thead>
           <tbody id="benBodySH1" class="divide-y divide-gray-100"></tbody>
@@ -241,29 +245,78 @@
     </div>
   </div>
 
-  <!-- Delete confirm modal -->
-  <div id="benDeleteModal" class="fixed inset-0 z-50 hidden items-center justify-center">
-    <div class="absolute inset-0 bg-black/40"></div>
-    <div class="relative bg-white rounded-2xl w-full max-w-md shadow-lg">
-      <div class="px-5 py-4 border-b flex items-center justify-between">
-        <h3 class="text-lg font-semibold">Delete Entry?</h3>
-        <button id="benDelClose" class="text-gray-500 hover:text-gray-700" type="button">
-          <i class="bi bi-x-lg"></i>
+</div>
+
+<!-- Delete confirm modal -->
+<div id="benDeleteModal" class="fixed inset-0 z-50 hidden items-center justify-center">
+  <div class="absolute inset-0 bg-black/40"></div>
+  <div class="relative bg-white rounded-2xl w-full max-w-md shadow-lg">
+    <div class="px-5 py-4 border-b flex items-center justify-between">
+      <h3 class="text-lg font-semibold">Delete Entry?</h3>
+      <button id="benDelClose" class="text-gray-500 hover:text-gray-700" type="button">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="px-5 py-4 space-y-2 text-sm text-gray-700">
+      <p class="text-gray-600">This action cannot be undone.</p>
+      <div class="bg-gray-50 rounded-lg p-3">
+        <div><span class="text-gray-500">Date:</span> <span id="benDelDate" class="font-medium"></span></div>
+        <div><span class="text-gray-500">Amount:</span> <span id="benDelAmount" class="font-medium"></span></div>
+        <div><span class="text-gray-500">Remark:</span> <span id="benDelRemark" class="font-medium"></span></div>
+      </div>
+    </div>
+    <div class="px-5 py-4 border-t flex items-center justify-end gap-2">
+      <button id="benDelCancel" type="button" class="px-4 py-2 rounded-lg border">Cancel</button>
+      <button id="benDelConfirm" type="button" class="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- Attachments Modal -->
+<div id="benAttachModal" class="fixed inset-0 z-50 hidden items-center justify-center">
+  <div class="absolute inset-0 bg-black/40"></div>
+  <div class="relative bg-white rounded-2xl w-full max-w-3xl shadow-lg">
+    <div class="px-5 py-4 border-b flex items-center justify-between">
+      <div>
+        <h3 class="text-lg font-semibold">Entry Attachments</h3>
+        <div id="benAttachMeta" class="text-xs text-gray-500 mt-1">Entry #—</div>
+      </div>
+      <button id="benAttachClose" class="text-gray-500 hover:text-gray-700" type="button"><i class="bi bi-x-lg"></i></button>
+    </div>
+
+    <div class="px-5 py-4 space-y-4">
+      <form id="benAttachForm" class="flex flex-wrap items-center gap-3">
+        <input type="hidden" name="entry_id" value="">
+
+        <select name="type" class="border rounded px-2 py-1 text-sm">
+          <option value="invoice">Invoice</option>
+          <option value="receipt">Receipt</option>
+          <option value="note">Note</option>
+          <option value="other" selected>Other</option>
+        </select>
+
+        <!-- hidden real input -->
+        <input id="benAttFiles" type="file" name="files[]" class="hidden" multiple>
+
+        <!-- visible controls -->
+        <button type="button" id="benAttBrowse"
+          class="px-3 py-1.5 rounded border bg-gray-50 hover:bg-gray-100 text-sm">
+          Browse
         </button>
-      </div>
-      <div class="px-5 py-4 space-y-2 text-sm text-gray-700">
-        <p class="text-gray-600">This action cannot be undone.</p>
-        <div class="bg-gray-50 rounded-lg p-3">
-          <div><span class="text-gray-500">Date:</span> <span id="benDelDate" class="font-medium"></span></div>
-          <div><span class="text-gray-500">Amount:</span> <span id="benDelAmount" class="font-medium"></span></div>
-          <div><span class="text-gray-500">Remark:</span> <span id="benDelRemark" class="font-medium"></span></div>
-        </div>
-      </div>
-      <div class="px-5 py-4 border-t flex items-center justify-end gap-2">
-        <button id="benDelCancel" type="button" class="px-4 py-2 rounded-lg border">Cancel</button>
-        <button id="benDelConfirm" type="button" class="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700">Delete</button>
+        <span id="benAttChosen" class="text-sm text-gray-500">No file chosen</span>
+
+        <button id="benAttUpload" class="px-3 py-1.5 rounded bg-indigo-600 text-white text-sm hover:bg-indigo-700" type="submit">
+          Upload
+        </button>
+
+        <a id="benAttachDownloadAll" href="#" class="ml-auto text-sm text-indigo-700 hover:underline" target="_blank">
+          Download all (PDF)
+        </a>
+      </form>
+
+      <div id="benAttachList" class="divide-y divide-gray-100">
+        <!-- rows injected -->
       </div>
     </div>
   </div>
-
 </div>
