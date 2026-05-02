@@ -12,7 +12,7 @@
     </div>
 
     <!-- KPI ROW (sticky) -->
-    <div id="kpiSticky" class="sticky top-0 z-40 mb-6">
+    <div id="kpiSticky" class="mb-6 md:sticky md:top-0 md:z-40">
         <!-- Backdrop shown only when stuck -->
         <div class="kpi-backdrop pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-200"></div>
 
@@ -62,8 +62,8 @@
     </div>
 
     <!-- BIG CHART FULL WIDTH -->
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 mb-6 h-[24rem]">
-        <canvas id="summaryChart" class="w-full h-full"></canvas>
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 mb-6 chart-wrap">
+        <canvas id="summaryChart"></canvas>
     </div>
 
     <!-- Cash Out Summary -->

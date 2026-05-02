@@ -35,7 +35,7 @@ class GtsInvestment extends Model
     protected $casts = [
         'date' => 'date',
         'repayment_date' => 'date',
-        'investment_amount' => 'decimal:2',
+        'investment_amount' => 'decimal:7',
         'murabaha'          => 'boolean', // if this is yes/no
     ];
 

@@ -145,7 +145,7 @@
     <div class="flex items-center justify-between px-6 py-4 border-b bg-gray-50">
       <h2 class="text-xl font-bold text-gray-800 flex items-center gap-2">
         <i class="bi bi-folder2-open text-blue-600 text-2xl"></i>
-        <span>Attachment Viewer – Investment <span id="attachmentViewerTitle" class="text-gray-600 font-medium text-base"></span></span>
+        <span>Attachment Viewer – Investment <span id="invAttachmentViewerTitle" class="text-gray-600 font-medium text-base"></span></span>
       </h2>
       <button id="closeInvestmentViewModal" class="text-gray-500 hover:text-red-600 text-2xl font-bold">&times;</button>
     </div>

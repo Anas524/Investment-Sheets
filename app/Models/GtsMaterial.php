@@ -31,10 +31,20 @@ class GtsMaterial extends Model
     ];
 
     protected $casts = [
-        'items_data' => 'array',
-        'invoice_date' => 'date',
+        'items_data'        => 'array',
+        'invoice_date'         => 'date',
+        // return as STRING with fixed scale; avoids float rounding in PHP
+        'shipping_cost'        => 'decimal:7',
+        'dgd'                  => 'decimal:7',
+        'labour'               => 'decimal:7',
+        'total_shipping_cost'  => 'decimal:7',
+        'total_material'       => 'decimal:7',
+        'ui_total_material'    => 'decimal:7',
+        'total_vat'            => 'decimal:7',
+        'total_material_buy'   => 'decimal:7',
+        'total_weight'         => 'decimal:7',
     ];
-
+    
     public function items()
     {
         return $this->hasMany(GtsMaterialItem::class, 'material_id', 'id');

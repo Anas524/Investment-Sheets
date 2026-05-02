@@ -1,6 +1,6 @@
 @php
-    // Global flag: available to all sections/partials that extend this layout
-    $isClosed = isset($cycle) && ($cycle->status ?? null) === 'closed';
+// Global flag: available to all sections/partials that extend this layout
+$isClosed = isset($cycle) && ($cycle->status ?? null) === 'closed';
 @endphp
 
 <!DOCTYPE html>
@@ -57,15 +57,15 @@
 
     <!-- HEADER - Show only ONCE here -->
     <header class="bg-white shadow">
-        <div class="max-w-7xl mx-auto px-4 py-4 grid grid-cols-3 items-center">
+        <div class="max-w-7xl mx-auto px-3 md:px-4 py-3 md:py-4 grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-0 items-center">
             <!-- Left: icon + title + status -->
-            <div class="flex items-end space-x-2">
-                <img id="headerIcon" src="{{ asset('images/sub-logo.png') }}" alt="Sub Logo" class="h-6">
-                <h1 id="headerTitle" class="text-xl font-semibold">GTS Investment</h1>
+            <div class="flex items-center space-x-2">
+                <i id="headerIcon" class="bi header-icon" aria-hidden="true"></i>
+                <h1 id="headerTitle" class="header-title">GTS Investment</h1>
 
                 @isset($cycle)
-                <span class="ml-2 px-2 py-0.5 text-xs rounded
-                        {{ $cycle->status === 'closed' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700' }}">
+                <span class="status-badge
+                        {{ $cycle->status === 'closed' ? 'status-closed' : 'status-open' }}">
                     {{ strtoupper($cycle->status) }}
                 </span>
                 @endisset
@@ -74,7 +74,7 @@
             <!-- Center: Dashboard button -->
             <div class="flex justify-center">
                 <a href="{{ route('cycles.index') }}"
-                    class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gray-900 text-white hover:bg-black shadow-sm allow-when-closed">
+                    class="btn-dashboard allow-when-closed">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z" />
                     </svg>
@@ -85,16 +85,16 @@
             <!-- Right: set info + logo -->
             <div class="flex items-center justify-end gap-3">
                 @isset($cycle)
-                <div class="text-right leading-tight text-xs text-gray-600">
+                <div class="set-meta">
                     {{ $cycle->name ?? 'Set' }}
                     @if($cycle->date_from || $cycle->date_to)
-                    • {{ optional($cycle->date_from)->toDateString() ?? '—' }}
-                    – {{ optional($cycle->date_to)->toDateString() ?? '—' }}
+                        • {{ optional($cycle->date_from)->toDateString() ?? '—' }}
+                        – {{ optional($cycle->date_to)->toDateString() ?? '—' }}
                     @endif
                 </div>
                 @endisset
 
-                <img id="headerLogo" src="{{ asset('images/gts-logo.png') }}" alt="Main Logo" class="h-16 md:h-20">
+                <img id="headerLogo" src="{{ asset('images/gts-logo.png') }}" alt="GTS" class="header-logo">
             </div>
         </div>
     </header>
@@ -106,7 +106,7 @@
     </div>
 
     <!-- MAIN DYNAMIC SECTION -->
-    <main class="container mx-auto p-4">
+    <main class="container mx-auto p-3 md:p-4 pb-28 md:pb-6">
         @yield('content')
     </main>
 
@@ -118,17 +118,19 @@
     </div>
 
     <!-- Bottom Sheet Tabs (Global) -->
-    <div class="fixed bottom-0 inset-x-0 bg-white shadow border-t flex justify-center space-x-1 z-50">
-        <button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100 active" data-sheet="summary">Summary Sheet</button>
-        <button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100" data-sheet="beneficiary">Beneficiary Sheet</button>
-        <button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100" data-sheet="gts-material">GTS Materials</button>
-        <button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100" data-sheet="gts-investment">GTS Investments</button>
-        <button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100" data-sheet="us">US Client Payment</button>
-        <button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100" data-sheet="sq">SQ Sheet</button>
-        <button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100" data-sheet="local">Local Sales</button>
+    <div class="fixed bottom-0 inset-x-0 bg-white shadow border-t z-50">
+        <div class="tabs-scroll flex overflow-x-auto whitespace-nowrap no-scrollbar gap-1 px-2 py-2 md:justify-center">
+            <button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100 active" data-sheet="summary">Summary Sheet</button>
+            <button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100" data-sheet="beneficiary">Beneficiary Sheet</button>
+            <button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100" data-sheet="gts-material">GTS Materials</button>
+            <button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100" data-sheet="gts-investment">GTS Investments</button>
+            <button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100" data-sheet="us">US Client Payment</button>
+            <button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100" data-sheet="sq">SQ Sheet</button>
+            <button class="sheet-tab px-4 py-2 text-sm font-medium hover:bg-gray-100" data-sheet="local">Local Sales</button>
 
-        <!-- Dynamic Customer Sheets -->
-        <span id="customerTabsContainer" class="relative"></span>
+            <!-- Dynamic Customer Sheets -->
+            <span id="customerTabsContainer" class="relative"></span>
+        </div>
     </div>
 
     <script>
@@ -153,16 +155,18 @@
     </script>
 
     <script type="application/json" id="cycle-json">
-    {!! json_encode(
-        isset($cycle) ? [
-            'id'        => $cycle->id ?? null,
-            'name'      => $cycle->name ?? null,
-            'status'    => $cycle->status ?? null,
-            'date_from' => optional($cycle->date_from)->toDateString(),
-            'date_to'   => optional($cycle->date_to)->toDateString(),
-        ] : null,
-        JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
-    ) !!}
+        {
+            !!json_encode(
+                isset($cycle) ? [
+                    'id' => $cycle - > id ?? null,
+                    'name' => $cycle - > name ?? null,
+                    'status' => $cycle - > status ?? null,
+                    'date_from' => optional($cycle - > date_from) - > toDateString(),
+                    'date_to' => optional($cycle - > date_to) - > toDateString(),
+                ] : null,
+                JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+            ) !!
+        }
     </script>
 
     <script>
@@ -262,6 +266,31 @@
                 id: s.id,
                 name: s.name
             }));
+        });
+    </script>
+
+    <script>
+        // Wrap any large tables/sections so they scroll horizontally on phones
+        document.addEventListener('DOMContentLoaded', function() {
+            // Tables: add a wrapper div.table-wrap if not present
+            document.querySelectorAll('table').forEach(function(tbl) {
+                if (!tbl.closest('.table-wrap')) {
+                    const wrap = document.createElement('div');
+                    wrap.className = 'table-wrap';
+                    tbl.parentNode.insertBefore(wrap, tbl);
+                    wrap.appendChild(tbl);
+                }
+            });
+
+            // Any manual wide blocks you mark as .responsive-h-target
+            document.querySelectorAll('.responsive-h-target').forEach(function(el) {
+                if (!el.closest('.responsive-h-scroll')) {
+                    const wrap = document.createElement('div');
+                    wrap.className = 'responsive-h-scroll';
+                    el.parentNode.insertBefore(wrap, el);
+                    wrap.appendChild(el);
+                }
+            });
         });
     </script>
 

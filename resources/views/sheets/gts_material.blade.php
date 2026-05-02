@@ -44,7 +44,7 @@
           <th class="border p-2 w-32">Total Material</th>
           <th class="border p-2 w-32">Total Shipping Cost</th>
           @unless ($isClosed)
-            <th class="border p-2 w-24 action-col" data-col="action">Action</th>
+          <th class="border p-2 w-24 action-col" data-col="action">Action</th>
           @endunless
         </tr>
       </thead>
@@ -73,7 +73,7 @@
           type="number"
           placeholder="0"
           data-field="units"
-          step="any" 
+          step="0.0000001"
           inputmode="decimal"
           class="material-input editable-input w-full rounded px-1 py-0.5 bg-white border border-gray-300 focus:outline-none" />
       </td>
@@ -84,7 +84,7 @@
           type="number"
           placeholder="0"
           data-field="unitPrice"
-          step="any" 
+          step="0.0000001"
           inputmode="decimal"
           class="material-input editable-input w-full rounded px-1 py-0.5 bg-white border border-gray-300 focus:outline-none" />
       </td>
@@ -95,7 +95,7 @@
           type="number"
           placeholder="0"
           data-field="vat"
-          step="any" 
+          step="0.0000001"
           inputmode="decimal"
           class="material-input editable-input w-full rounded px-1 py-0.5 bg-white border border-gray-300 focus:outline-none" />
       </td>
@@ -109,7 +109,7 @@
           type="number"
           placeholder="0"
           data-field="weightPerCtn"
-          step="any" 
+          step="0.0000001"
           inputmode="decimal"
           class="material-input editable-input w-full rounded px-1 py-0.5 bg-white border border-gray-300 focus:outline-none" />
       </td>
@@ -120,7 +120,7 @@
           type="number"
           placeholder="0"
           data-field="ctns"
-          step="any" 
+          step="0.0000001"
           inputmode="decimal"
           class="material-input editable-input w-full rounded px-1 py-0.5 bg-white border border-gray-300 focus:outline-none" />
       </td>
@@ -211,126 +211,172 @@
   </div>
 </div>
 
-<!-- GTS Material Attachment Modal -->
-<div id="gtsAttachmentModal" class="fixed inset-0 bg-black/60 z-50 hidden items-center justify-center backdrop-blur-sm">
-  <div class="bg-white w-full max-w-lg rounded-2xl shadow-xl p-6 relative border border-gray-200">
+{{-- MATERIAL: Upload Modal (Metal-ledger style) --}}
+<div id="matAttUploadModal" class="pm-modal hidden fixed inset-0 z-[9999]">
+  <div class="pm-backdrop absolute inset-0" id="matAttUploadBackdrop"></div>
 
-    <!-- Close Button -->
-    <button id="gtsModalCloseBtn" class="absolute top-4 right-4 text-gray-500 hover:text-red-600 text-2xl font-bold">
-      &times;
-    </button>
+  <div class="pm-modal-wrap">
+    <div class="pm-panel pm-panel--upload">
+      <div class="pm-panel-head flex items-center justify-between px-6 py-4">
+        <div>
+          <div class="text-lg font-semibold">Upload Attachments</div>
+          <div class="text-xs pm-subtext">PDF and images only, max 25MB each.</div>
+        </div>
+        <button type="button" class="pm-close-btn" id="matAttUploadClose">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>
 
-    <!-- Title -->
-    <h2 class="text-2xl font-bold text-black mb-6 border-b pb-3">Upload Attachments</h2>
+      <div class="pm-panel-body p-6 space-y-5">
+        <form id="matAttUploadForm" enctype="multipart/form-data">
+          <input type="hidden" id="matAttRowId" name="row_id" value="">
+          <input type="hidden" id="matRemoveInvoice" name="remove_invoice" value="0">
+          <input type="hidden" id="matRemoveReceipt" name="remove_receipt" value="0">
+          <input type="hidden" id="matRemoveNote" name="remove_note" value="0">
 
-    <!-- Form -->
-    <form id="gtsAttachmentForm" enctype="multipart/form-data" class="space-y-5">
-      <input type="hidden" id="gtsAttachRowId">
+          <div class="pm-upload-grid">
+            <!-- Invoice -->
+            <div>
+              <div class="flex items-center justify-between mb-1">
+                <div class="text-sm font-semibold">Invoice</div>
+              </div>
 
-      <div class="space-y-1">
-        <label class="block text-sm font-medium text-gray-700">Invoice</label>
-        <label class="relative block w-full cursor-pointer">
-          <input type="file" id="gtsAttachInvoice" name="invoice" accept="image/*,application/pdf" class="sr-only">
-          <div class="flex items-center justify-between border border-gray-300 rounded-md px-4 py-2 bg-white text-gray-700 hover:bg-gray-50 transition">
-            <div class="flex flex-col w-full">
-              <span id="gtsAttachInvoiceFilename" class="truncate text-sm text-gray-700">No file chosen</span>
+              <input id="matInvoiceInput" type="file" name="invoice" accept=".pdf,.jpg,.jpeg,.png,.webp" class="hidden">
+
+              <div class="pm-dropzone pm-dropzone--compact" data-pick="invoice">
+                <div class="pm-fileline">
+                  <div class="pm-filemeta">
+                    <div id="matInvoiceLabel" class="pm-file-name">No file selected yet.</div>
+                  </div>
+                  <button type="button" class="pm-btn pm-btn-secondary" data-browse="invoice">
+                    <i class="bi bi-folder2-open"></i> Browse
+                  </button>
+                </div>
+              </div>
             </div>
-            <span class="text-sm font-semibold text-blue-600">Browse</span>
-          </div>
-        </label>
-        <span id="gtsAttachInvoiceStatus" class="text-green-600 text-xs hidden items-center gap-1">
-          <i class="bi bi-check-circle-fill text-green-600"></i> Uploaded
-        </span>
-      </div>
 
-      <div class="space-y-1">
-        <label class="block text-sm font-medium text-gray-700">Bank Transfer Receipt</label>
-        <label class="relative block w-full cursor-pointer">
-          <input type="file" id="gtsAttachReceipt" name="receipt" accept="image/*,application/pdf" class="sr-only">
-          <div class="flex items-center justify-between border border-gray-300 rounded-md px-4 py-2 bg-white text-gray-700 hover:bg-gray-50 transition">
-            <div class="flex flex-col w-full">
-              <span id="gtsAttachReceiptFilename" class="truncate text-sm text-gray-700">No file chosen</span>
+            <!-- Receipt -->
+            <div>
+              <div class="flex items-center justify-between mb-1">
+                <div class="text-sm font-semibold">Bank Transfer Receipt</div>
+              </div>
+
+              <input id="matReceiptInput" type="file" name="receipt" accept=".pdf,.jpg,.jpeg,.png,.webp" class="hidden">
+
+              <div class="pm-dropzone pm-dropzone--compact" data-pick="receipt">
+                <div class="pm-fileline">
+                  <div class="pm-filemeta">
+                    <div id="matReceiptLabel" class="pm-file-name">No file selected yet.</div>
+                  </div>
+                  <button type="button" class="pm-btn pm-btn-secondary" data-browse="receipt">
+                    <i class="bi bi-folder2-open"></i> Browse
+                  </button>
+                </div>
+              </div>
             </div>
-            <span class="text-sm font-semibold text-blue-600">Browse</span>
-          </div>
-        </label>
-        <span id="gtsAttachReceiptStatus" class="text-green-600 text-xs hidden items-center gap-1">
-          <i class="bi bi-check-circle-fill text-green-600"></i> Uploaded
-        </span>
-      </div>
 
-      <div class="space-y-1">
-        <label class="block text-sm font-medium text-gray-700">Delivery Note</label>
-        <label class="relative block w-full cursor-pointer">
-          <input type="file" id="gtsAttachNote" name="note" accept="image/*,application/pdf" class="sr-only">
-          <div class="flex items-center justify-between border border-gray-300 rounded-md px-4 py-2 bg-white text-gray-700 hover:bg-gray-50 transition">
-            <div class="flex flex-col w-full">
-              <span id="gtsAttachNoteFilename" class="truncate text-sm text-gray-700">No file chosen</span>
+            <!-- Note -->
+            <div>
+              <div class="flex items-center justify-between mb-1">
+                <div class="text-sm font-semibold">Delivery Note</div>
+              </div>
+
+              <input id="matNoteInput" type="file" name="note" accept=".pdf,.jpg,.jpeg,.png,.webp" class="hidden">
+
+              <div class="pm-dropzone pm-dropzone--compact" data-pick="note">
+                <div class="pm-fileline">
+                  <div class="pm-filemeta">
+                    <div id="matNoteLabel" class="pm-file-name">No file selected yet.</div>
+                  </div>
+                  <button type="button" class="pm-btn pm-btn-secondary" data-browse="note">
+                    <i class="bi bi-folder2-open"></i> Browse
+                  </button>
+                </div>
+              </div>
             </div>
-            <span class="text-sm font-semibold text-blue-600">Browse</span>
           </div>
-        </label>
-        <span id="gtsAttachNoteStatus" class="text-green-600 text-xs hidden items-center gap-1">
-          <i class="bi bi-check-circle-fill text-green-600"></i> Uploaded
-        </span>
+
+          <div class="pt-4">
+            <div class="text-sm font-semibold mb-2">Existing attachments</div>
+
+            <!-- loading -->
+            <div id="matExistingLoading" class="hidden text-sm text-slate-500 flex items-center gap-2">
+              <i class="bi bi-arrow-repeat animate-spin"></i>
+              <span>Loading attachments…</span>
+            </div>
+
+            <!-- list -->
+            <div id="matExistingList" class="space-y-2 max-h-40 overflow-auto"></div>
+          </div>
+        </form>
       </div>
 
-      <div class="flex justify-end gap-3 pt-4 border-t">
-        <button type="button" id="gtsCancelBtn" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-md">Cancel</button>
-        <button type="submit" class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md font-semibold">Save</button>
+      <div class="pm-panel-foot flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-200">
+        <button type="button" id="matAttUploadCancel" class="pm-btn pm-btn-secondary">Cancel</button>
+        <button type="button" id="matAttUploadBtn" class="pm-btn pm-btn-primary">
+          <i class="bi bi-cloud-arrow-up"></i> Upload
+        </button>
       </div>
-    </form>
+    </div>
   </div>
 </div>
 
-<!-- Modern View Attachment Modal -->
-<div id="viewAttachmentModal" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 backdrop-blur-sm px-4">
-  <div class="bg-white max-w-4xl w-full rounded-2xl shadow-xl overflow-hidden flex flex-col" style="max-height: 85vh;">
 
-    <!-- Modal Header -->
-    <div class="flex items-center justify-between px-6 py-4 border-b bg-gray-50">
-      <h2 class="text-xl font-bold text-gray-800 flex items-center gap-2">
-        <i class="bi bi-folder2-open text-blue-600 text-2xl"></i>
-        <span>Attachment Viewer – <span id="attachmentViewerTitle" class="text-gray-600 font-medium text-base"></span></span>
-      </h2>
+{{-- MATERIAL: Viewer Modal (Metal-ledger style) --}}
+<div id="matAttViewerModal" class="pm-modal hidden fixed inset-0 z-[9999]">
+  <div class="pm-backdrop absolute inset-0" id="matAttViewerBackdrop"></div>
 
-      <button id="closeMaterialViewModal" class="text-gray-500 hover:text-red-600 text-2xl font-bold">&times;</button>
-    </div>
+  <div class="pm-modal-wrap">
+    <div class="pm-panel pm-panel--viewer">
+      <div class="pm-panel-head flex items-center justify-between px-6 py-4">
+        <div>
+          <div class="text-lg font-semibold">Attachments Viewer</div>
+          <div class="text-xs pm-subtext" id="matViewerSubTitle"></div>
+        </div>
+        <button type="button" class="pm-close-btn" id="matAttViewerClose">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>
 
-    <!-- Modal Body (Scrollable) -->
-    <div id="pdfContentForDownload" class="space-y-4 text-sm px-6 py-4 overflow-auto max-h-[65vh]">
-      <div class="flex justify-between items-center">
-        <strong>Invoice:</strong>
-        <div class="flex items-center gap-2">
-          <a id="viewInvoiceLink" href="#" target="_blank" class="text-gray-400 underline">Not Uploaded</a>
-          <span id="viewInvoiceName" class="text-gray-500 text-xs"></span>
+      <div class="pm-panel-body grid grid-cols-12">
+        <div class="col-span-4 border-r border-slate-200 p-4">
+          <div id="matViewerList" class="space-y-2"></div>
+        </div>
+
+        <div class="col-span-8 p-4">
+          <div id="matPreviewBox" class="bg-slate-50 border border-slate-200 rounded-xl h-[440px] overflow-auto">
+            <iframe id="matPreviewFrame" class="w-full h-full hidden"></iframe>
+
+            <div id="matPreviewImgWrap" class="hidden w-full h-full flex items-center justify-center">
+              <img id="matPreviewImg" class="max-w-full" />
+            </div>
+
+            <div id="matPreviewEmpty" class="h-full flex items-center justify-center text-slate-500">
+              Select a file to preview
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between mt-4">
+            <div class="flex items-center gap-2">
+              <button type="button" id="matZoomOut" class="pm-btn pm-btn-secondary">−</button>
+              <button type="button" id="matZoomIn" class="pm-btn pm-btn-secondary">+</button>
+              <button type="button" id="matZoomReset" class="pm-btn pm-btn-secondary">Reset</button>
+              <button type="button" id="matZoomFit" class="pm-btn pm-btn-secondary">Fit</button>
+            </div>
+
+            <div class="flex items-center gap-3">
+              <a id="matDownloadBtn" href="#" class="pm-btn pm-btn-secondary">
+                <i class="bi bi-download"></i> Download
+              </a>
+
+              <a id="matDownloadAllBtn" href="#" class="pm-btn pm-btn-primary">
+                <i class="bi bi-download"></i> Download All
+              </a>
+            </div>
+          </div>
+
         </div>
       </div>
-      <div class="flex justify-between items-center">
-        <strong>Bank Transfer Receipt:</strong>
-        <div class="flex items-center gap-2">
-          <a id="viewReceiptLink" href="#" target="_blank" class="text-gray-400 underline">Not Uploaded</a>
-          <span id="viewReceiptName" class="text-gray-500 text-xs"></span>
-        </div>
-      </div>
-      <div class="flex justify-between items-center">
-        <strong>Delivery Note:</strong>
-        <div class="flex items-center gap-2">
-          <a id="viewNoteLink" href="#" target="_blank" class="text-gray-400 underline">Not Uploaded</a>
-          <span id="viewNoteName" class="text-gray-500 text-xs"></span>
-        </div>
-      </div>
     </div>
-
-    <!-- Modal Footer -->
-    <div class="flex justify-end items-center gap-4 px-6 py-4 border-t bg-gray-50">
-      <button id="matDownloadBtn" class="bg-gray-700 hover:bg-gray-800 text-white px-4 py-2 rounded-md font-medium">
-        <i class="bi bi-download"></i> Download PDF
-      </button>
-      <button id="closeMaterialViewModalBottom" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-md font-medium">
-        Close
-      </button>
-    </div>
-
   </div>
 </div>

@@ -34,6 +34,8 @@ Route::delete('/gts-materials/items/{id}', [GtsMaterialController::class, 'delet
 Route::post('/gts-materials/upload-attachments/{id}', [GtsMaterialController::class, 'uploadAttachments']);
 Route::get('/gts-materials/get-attachments/{id}', [GtsMaterialController::class, 'getAttachments']);
 Route::get('/gts-materials/download-pdf/{id}', [GtsMaterialController::class, 'downloadAttachments']);
+Route::post('/gts-materials/{id}/delete-attachment', [GtsMaterialController::class, 'deleteAttachment']);
+Route::get('/gts-materials/{id}/debug-attachment', [GtsMaterialController::class, 'debugAttachment']);
 
 // Investments
 Route::get('/investments', [GtsInvestmentController::class, 'index'])->name('investments.index');
@@ -87,7 +89,7 @@ Route::get('/summary/local-sales/total', [SummaryController::class, 'localSalesT
 Route::post('/customer/sheets/create', [CustomerSheetController::class, 'storeSheetName'])->name('customer.sheets.create');
 
 Route::get('/dashboard', function () {
-    return redirect()->route('index');
+    return redirect()->route('pl.index');
 })->name('dashboard');
 
 Route::get('/customer/sheet/data/{sheet}', [CustomerSheetController::class, 'getSheetData']);
@@ -125,7 +127,7 @@ Route::middleware(BindCycleFromRoute::class)->group(function () {
         Route::post('{entry}/attachments', [CustomerSheetAttachmentController::class, 'store'])->name('customer.attach.store');
         Route::delete('attachments/{id}', [CustomerSheetAttachmentController::class, 'destroy'])->name('customer.attach.destroy');
     });
-    
+
     // Section render
     Route::get('/customer-sheet/section/{sheet}', [CustomerSheetController::class, 'section'])
         ->name('customer.sheet.section');

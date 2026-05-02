@@ -14,6 +14,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware) {
         $middleware->alias([
             'bind.cycle' => BindCycleFromRoute::class,
+            'auth' => \App\Http\Middleware\Authenticate::class,
         ]);
         // optionally add to the web group globally:
         // $middleware->appendToGroup('web', BindCycleFromRoute::class);

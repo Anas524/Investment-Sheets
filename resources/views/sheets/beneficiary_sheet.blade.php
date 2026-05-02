@@ -23,11 +23,11 @@
   <!-- Three KPI cards -->
   <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
     <div class="bg-white rounded-2xl shadow p-4 border-l-4 border-amber-500">
-      <div class="text-gray-500 text-sm">Shareholder 1 – Allocation</div>
+      <div class="text-gray-500 text-sm">Shareholder 1 - Mr. Khurram – Allocation</div>
       <div id="benSH1Balance" class="text-2xl font-bold text-amber-800">AED 0.00</div>
     </div>
     <div class="bg-white rounded-2xl shadow p-4 border-l-4 border-violet-500">
-      <div class="text-gray-500 text-sm">Shareholder 2 – Allocation</div>
+      <div class="text-gray-500 text-sm">Shareholder 2 - Mr. Zeeshan – Allocation</div>
       <div id="benSH2Balance" class="text-2xl font-bold text-violet-800">AED 0.00</div>
     </div>
     <div class="bg-white rounded-2xl shadow p-4 border-l-4 border-emerald-500">
@@ -64,7 +64,7 @@
     <!-- Shareholder 1 -->
     <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
       <div class="px-5 py-3 border-b bg-amber-50 border-amber-300">
-        <h2 class="text-lg font-semibold text-amber-800">Shareholder 1</h2>
+        <h2 class="text-lg font-semibold text-amber-800">Shareholder 1 - Mr. Khurram</h2>
       </div>
       <!-- Inline Add Row -->
       <div class="px-5 py-3 border-b bg-gray-50">
@@ -158,7 +158,7 @@
     <!-- Shareholder 2 -->
     <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
       <div class="px-5 py-3 border-b bg-violet-50 border-violet-300">
-        <h2 class="text-lg font-semibold text-violet-800">Shareholder 2</h2>
+        <h2 class="text-lg font-semibold text-violet-800">Shareholder 2 - Mr. Zeeshan</h2>
       </div>
       <div class="px-5 py-3 border-b bg-gray-50">
         <form id="benFormSH2" class="grid grid-cols-12 gap-3 items-end">

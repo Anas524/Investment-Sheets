@@ -182,15 +182,27 @@
     }
 
     function fetchMaterialTotals() {
-        // Force the authoritative endpoint for Materials totals (includes ui_total_material)
         const base = '/gts-materials/total';
         const finalUrl = window.withCycle ? window.withCycle(base) : base;
 
         return $.getJSON(finalUrl)
-            .then(r => ({
-                material: Number(r?.material) || 0,
-                shipping: Number(r?.shipping) || 0
-            }))
+            .then(r => {
+                // prefer real totals
+                const material =
+                    Number(r?.total_material) ||
+                    Number(r?.total_material_buy) ||
+                    Number(r?.material) ||
+                    Number(r?.ui_total_material) ||
+                    0;
+
+                const shipping =
+                    Number(r?.total_shipping_cost) ||
+                    Number(r?.shipping_cost) ||
+                    Number(r?.shipping) ||
+                    0;
+
+                return { material, shipping };
+            })
             .catch(() => ({ material: 0, shipping: 0 }));
     }
 

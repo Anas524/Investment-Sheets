@@ -10,6 +10,147 @@ window._autoSizeTA = window._autoSizeTA || function (el) {
   el.style.height = el.scrollHeight + 'px';
 };
 
+window.__matAttCache = window.__matAttCache || {};
+
+function renderExistingList(data, rowId) {
+  const items = [
+    { key: 'invoice', label: 'Invoice', url: normalizeAttUrl(data.invoice) },
+    { key: 'receipt', label: 'Bank Receipt', url: normalizeAttUrl(data.receipt) },
+    { key: 'note', label: 'Delivery Note', url: normalizeAttUrl(data.note) },
+  ];
+
+  const $list = $('#matExistingList').empty();
+
+  items.forEach(it => {
+    const has = !!it.url;
+
+    const row = $(`
+      <div class="flex items-center justify-between border border-slate-200 rounded-xl px-3 py-2">
+        <div class="min-w-0 pr-3">
+          <div class="text-sm font-semibold">${it.label}</div>
+          <div class="text-xs pm-subtext pm-existing-name">${has ? getFileName(it.url) : 'Not uploaded'}</div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          ${has ? `
+            <button type="button"
+              class="mat-att-del-btn relative group h-8 w-8 rounded-lg border border-slate-200 hover:bg-slate-50 flex items-center justify-center"
+              data-id="${rowId}" data-type="${it.key}">
+              <i class="bi bi-trash text-red-600"></i>
+
+              <span class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2
+                scale-0 group-hover:scale-100 transition
+                bg-black text-white text-xs px-2 py-1 rounded pointer-events-none whitespace-nowrap">
+                Delete
+              </span>
+            </button>
+          ` : `<span class="text-xs text-slate-400">—</span>`}
+        </div>
+      </div>
+    `);
+
+    $list.append(row);
+  });
+}
+
+function countAttachments(data) {
+  // accepts entry OR attachments object
+  const inv = data.invoice || data.invoice_path || data.invoice_url;
+  const rec = data.receipt || data.receipt_path || data.receipt_url;
+  const note = data.note || data.note_path || data.note_url;
+  return [inv, rec, note].filter(Boolean).length;
+}
+
+function updateRowAttachmentBadge(id, attObj) {
+  const n = [attObj?.invoice, attObj?.receipt, attObj?.note].filter(Boolean).length;
+
+  // find the view button for that row id
+  const $viewBtn = $(`.view-btn[data-id="${id}"]`);
+  if (!$viewBtn.length) return;
+
+  // remove existing badge
+  $viewBtn.find('.mat-att-dot').remove();
+
+  // add badge if >0
+  if (n > 0) {
+    $viewBtn.append(`
+      <span class="mat-att-dot absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1
+        rounded-full bg-red-600 text-white text-[11px] font-bold
+        flex items-center justify-center leading-none">${n}</span>
+    `);
+  }
+}
+
+function showExistingLoading(on) {
+  $('#matExistingLoading').toggleClass('hidden', !on);
+}
+
+function setUploadLabels(data) {
+  const inv = data?.invoice ? getFileName(data.invoice) : 'No file selected yet.';
+  const rec = data?.receipt ? getFileName(data.receipt) : 'No file selected yet.';
+  const note = data?.note ? getFileName(data.note) : 'No file selected yet.';
+
+  $('#matInvoiceLabel').text(inv);
+  $('#matReceiptLabel').text(rec);
+  $('#matNoteLabel').text(note);
+}
+
+function fastLoadAttachments(id) {
+  showExistingLoading(true);
+  $('#matExistingList').empty();
+
+  // if cached, paint instantly and hide loading (because user sees data now)
+  if (window.__matAttCache?.[id]) {
+    const cached = window.__matAttCache[id];
+    setUploadLabels(cached);
+    renderExistingList(cached, id);
+    showExistingLoading(false); // hide after cached render
+  }
+
+  return $.get(withCycle(`/gts-materials/get-attachments/${id}`))
+    .done(data => {
+      window.__matAttCache = window.__matAttCache || {};
+      window.__matAttCache[id] = data || {};
+
+      setUploadLabels(data || {});
+      renderExistingList(data || {}, id);
+      updateRowAttachmentBadge(id, data || {});
+    })
+    .fail(() => {
+      $('#matExistingList').html(`
+        <div class="text-sm text-red-600 border border-red-200 bg-red-50 rounded-xl p-3">
+          Failed to load attachments.
+        </div>
+      `);
+    })
+    .always(() => {
+      showExistingLoading(false); // always hide when request completes
+    });
+}
+
+function showModal($m) {
+  $m.removeClass('hidden').addClass('flex').css('display', 'flex');
+}
+function hideModal($m) {
+  $m.addClass('hidden').removeClass('flex').css('display', '');
+}
+
+function normalizeAttUrl(u) {
+  if (!u) return null;
+  const s = String(u).trim();
+
+  // already absolute
+  if (/^https?:\/\//i.test(s)) return s;
+
+  // protocol-relative
+  if (s.startsWith('//')) return window.location.protocol + s;
+
+  // make it absolute from site root
+  if (s.startsWith('/')) return s;
+
+  return '/' + s.replace(/^\/+/, '');
+}
+
 function _compactReceiptResize(scope) {
   const rec = $(scope).find('textarea.receipt-no-textarea')[0];
   const rem = $(scope).find('textarea.remarks-textarea')[0];
@@ -56,6 +197,18 @@ if (!window.__gtsCombinedHooked) {
   });
 
   if (typeof updateCombinedCard === 'function') updateCombinedCard();
+}
+
+function formatLongDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso + 'T00:00:00'); // avoid timezone shift
+  if (isNaN(d)) return '';
+  return d.toLocaleDateString('en-GB', {
+    weekday: 'long',
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric'
+  });
 }
 
 $(function () {
@@ -129,10 +282,6 @@ function initMaterialLogic() {
 
     // Extract input values
     const rawDate = $modalInvoiceDate.val().trim();
-    const parsedDate = new Date(rawDate);
-    const options = { weekday: "long", day: "2-digit", month: "long", year: "numeric" };
-    const invoiceDate = parsedDate.toLocaleDateString("en-GB", options);
-
     const invoiceNo = $("#modalInvoiceNo").val().trim();
     const supplierName = $modalSupplierName.val().trim();
     const description = $modalDescription.val().trim();
@@ -152,14 +301,33 @@ function initMaterialLogic() {
           </div>
         </td>`;
 
+    const rawDateISO = rawDate || ''; // YYYY-MM-DD from <input type="date">
+
+    const draftHeaderCells = `
+      <td class="border p-2">
+          <span class="mh-date-text block ${IS_CLOSED ? '' : 'cursor-pointer'}">
+            ${formatLongDate(rawDateISO)}
+          </span>
+          <input type="date"
+                class="mh-invoice-date w-full bg-transparent outline-none hidden"
+                value="${rawDateISO}" ${IS_CLOSED ? 'disabled' : ''}>
+      </td>
+      <td class="border p-2">
+        <input type="text" class="draft-invoice-no w-full bg-transparent outline-none" value="${escapeHtml(invoiceNo)}">
+      </td>
+      <td class="border p-2">
+        <input type="text" class="draft-supplier-name w-full bg-transparent outline-none" value="${escapeHtml(supplierName)}">
+      </td>
+      <td class="border p-2">
+        <input type="text" class="draft-brief-description w-full bg-transparent outline-none" value="${escapeHtml(description)}">
+      </td>
+    `;
+
     // Create header row
     const $headerRow = $(`
       <tr class="header-row cursor-pointer hover:bg-gray-100" data-brief="${description}" data-submitted="false" data-new="true">
         <td class="border p-2 text-center">${serialNumber}</td>
-        <td class="border p-2">${invoiceDate}</td>
-        <td class="border p-2">${invoiceNo || ''}</td>
-        <td class="border p-2">${supplierName}</td>
-        <td class="border p-2">${description}</td>
+        ${draftHeaderCells}
         <td class="border p-2 header-total-material">AED 0</td>
         <td class="border p-2 header-total-shipping">AED 0</td>
         ${actionCellHtml}
@@ -170,13 +338,13 @@ function initMaterialLogic() {
     const $detailRow = $(`
       <tr class="mat-detail-row detail-row relative hidden" data-new="true">
         <td colspan="${COLS}" class="p-2 bg-gray-50">
-        <div class="text-center font-bold text-xl mb-4 bg-blue-200 p-2">${supplierName}</div>
+        <div class="supplier-title text-center font-bold text-xl mb-4 bg-blue-200 p-2">${supplierName}</div>
 
           <div class="flex justify-center">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-16 w-full max-w-5xl mx-auto">
               <!-- Left Section -->
               <div class="space-y-2 border-4 border-zinc-500 p-5 bg-white">
-                <div class="flex items-start gap-2"><span class="font-semibold w-56">Invoice No:</span> <div class="flex-1 text-gray-700">${invoiceNo}</div></div>
+                <div class="flex items-start gap-2"><span class="font-semibold w-56">Invoice No:</span> <div class="invoice-no-label flex-1 text-gray-700">${invoiceNo}</div></div>
                 <div class="flex items-start gap-2"><span class="font-semibold w-56">Total Weight (KG):</span> <div class="flex-1 text-gray-700 total-weight-kg">0</div></div>
                 <div class="flex items-start gap-2"><span class="font-semibold w-56">Total No. of Units:</span> <div class="flex-1 text-gray-700 total-units">0</div></div>
                 <div class="flex items-start gap-2"><span class="font-semibold w-56">DGD:</span> <div class="flex-1 text-gray-700 dgd-value">AED</div></div>
@@ -241,7 +409,7 @@ function initMaterialLogic() {
                   value="0"
                   min="0"
                   data-field="shippingCost"
-                  step="any" 
+                  step="0.0000001"
                   inputmode="decimal"
                   class="shipping-input w-full bg-yellow-100 border-0 focus:outline-none"
                 />
@@ -256,7 +424,7 @@ function initMaterialLogic() {
                   value="0"
                   min="0"
                   data-field="dgd"
-                  step="any" 
+                  step="0.0000001"
                   inputmode="decimal"
                   class="shipping-input flex-1 bg-yellow-100 border-0 focus:outline-none"
                 />
@@ -271,7 +439,7 @@ function initMaterialLogic() {
                   value="0"
                   min="0"
                   data-field="labour"
-                  step="any" 
+                  step="0.0000001"
                   inputmode="decimal"
                   class="shipping-input flex-1 bg-yellow-100 border-0 focus:outline-none"
                 />
@@ -304,7 +472,9 @@ function initMaterialLogic() {
     $detailRow.find('textarea.dynamic-textarea').each(function () { window._autoSizeTA?.(this); });
     _compactReceiptResize($detailRow);
 
-    $detailRow.find(".total-weight-kg, .total-vat, .total-material-buy, .total-material-without-vat, .total-shipping-cost").text("AED 0");
+    $detailRow.find(".total-vat, .total-material-buy, .total-material-without-vat, .total-shipping-cost").text("AED 0");
+    $detailRow.find(".total-weight-kg").text("0");
+
     $detailRow.find(".dgd-value, .labour-value, .shipping-cost-value").text("AED 0");
 
     // Add dynamic input listeners to this row
@@ -481,15 +651,33 @@ function initMaterialLogic() {
     }
   });
 
+  // click long text -> open date input
+  $(document).on('click', '.mh-date-text', function (e) {
+    if (IS_CLOSED) return;
+    const $td = $(this).closest('td');
+    $td.find('.mh-date-text').addClass('hidden');
+    const $inp = $td.find('.mh-invoice-date');
+    $inp.removeClass('hidden').focus().trigger('click');
+  });
+
+  // when date picked or user leaves -> convert back to long text
+  $(document).on('change blur', '.mh-invoice-date', function () {
+    const $inp = $(this);
+    const iso = ($inp.val() || '').slice(0, 10);
+    const $td = $inp.closest('td');
+    $td.find('.mh-date-text').text(formatLongDate(iso)).removeClass('hidden');
+    $inp.addClass('hidden');
+  });
+
   $(document).on("click.gtsmat", `${MAT_ROOT} .materials-submit-btn`, function () {
     const $headerRow = $(this).closest("tr");
     const $detailRow = $headerRow.next(DETAIL_SEL);
 
     // Extract header fields
-    const invoiceDate = $headerRow.find("td").eq(1).text().trim();
-    const invoiceNo = $headerRow.find("td").eq(2).text().trim();
-    const supplierName = $headerRow.find("td").eq(3).text().trim();
-    const briefDescription = $headerRow.data("brief");
+    const invoiceDateISO = ($headerRow.find('.mh-invoice-date').val() || '').slice(0, 10);
+    const invoiceNo = ($headerRow.find('.draft-invoice-no').val() || '').trim();
+    const supplierName = ($headerRow.find('.draft-supplier-name').val() || '').trim();
+    const briefDescription = ($headerRow.find('.draft-brief-description').val() || '').trim();
     const totalMaterial = $headerRow.find(".header-total-material").text().replace(/[^\d.]/g, "");
     const totalShipping = $headerRow.find(".header-total-shipping").text().replace(/[^\d.]/g, "");
 
@@ -502,7 +690,7 @@ function initMaterialLogic() {
 
     // Build the payload
     const data = {
-      invoice_date: invoiceDate,
+      invoice_date: invoiceDateISO,
       invoice_no: invoiceNo,
       supplier_name: supplierName,
       brief_description: briefDescription,
@@ -544,8 +732,16 @@ function initMaterialLogic() {
       success: function (response) {
         // 1) persist ids on both rows
         const materialId = response.id;
-        $headerRow.attr("data-id", materialId);
-        $detailRow.addClass("submitted").attr("data-loaded", "true");
+        // mark BOTH rows clearly
+        $headerRow.attr("data-id", materialId).attr("data-loaded", "true");
+        $detailRow
+          .attr("data-id", materialId)
+          .addClass("submitted")
+          .attr("data-loaded", "true");
+
+        // create snapshot immediately
+        $detailRow.data("snapshot", buildMaterialSnapshot($detailRow));
+        toggleUpdateButtonForDetail($detailRow);
 
         // 2) ensure header totals reflect what we just typed
         calculateRowTotals($detailRow, $headerRow);
@@ -576,66 +772,6 @@ function initMaterialLogic() {
       error: function (xhr) {
         console.error("Error saving material:", xhr.responseText);
         alert("Failed to save. See console for details.");
-      }
-    });
-  });
-
-  // Update material row from action column
-  $(document).on("click.gtsmat", `${MAT_ROOT} .update-material-btn`, function () {
-    const $headerRow = $(this).closest("tr.header-row");
-    const $detailRow = $headerRow.next(DETAIL_SEL);
-    const id = $headerRow.data("id");
-
-    if (!id) {
-      alert("Row ID missing, cannot update.");
-      return;
-    }
-
-    // Current snapshot
-    const prevSnap = $detailRow.data("snapshot") || {};
-    const newSnap = buildMaterialSnapshot($detailRow);
-
-    // Compare snapshots
-    if (JSON.stringify(prevSnap) === JSON.stringify(newSnap)) {
-      // nothing to save; keep button hidden anyway
-      return;
-    }
-
-    // Build payload
-    const data = {
-      mode_of_transaction: newSnap.mot,
-      receipt_no: newSnap.receipt,
-      remarks: newSnap.remarks,
-      shipping_cost: newSnap.shipping,
-      dgd: newSnap.dgd,
-      labour: newSnap.labour,
-      materials: newSnap.items
-    };
-
-    const postUrl = (typeof investmentUrl === 'function')
-      ? investmentUrl('gts-materials')
-      : (typeof withCycle === 'function' ? withCycle('/gts-materials') : '/gts-materials');
-
-    $.ajax({
-      url: postUrl,
-      method: "POST",
-      data,
-      headers: { "X-CSRF-TOKEN": $('meta[name="csrf-token"]').attr("content") },
-      data: data,
-      success: function () {
-        // refresh snapshot and hide button
-        $detailRow.data("snapshot", newSnap);
-        toggleUpdateButtonForDetail($detailRow);
-
-        // green flash
-        $detailRow.find("input, textarea").removeClass("field-changed").addClass("bg-green-100");
-        setTimeout(() => $detailRow.find("input, textarea").removeClass("bg-green-100"), 1000);
-
-        alert("Row updated successfully.");
-      },
-      error: function (xhr) {
-        console.error(xhr.responseText);
-        alert("Failed to update row.");
       }
     });
   });
@@ -754,186 +890,261 @@ function initMaterialLogic() {
     $rowToDelete = null;
   });
 
-  // Upload Click
-  $(document).on('click.gtsmat', `${MAT_ROOT} .upload-btn`, function () {
+  // ---------- MATERIAL ATTACHMENTS (Metal-ledger style) ----------
+
+  function showPM($m) { $m.removeClass('hidden').css('display', 'flex'); }
+  function hidePM($m) { $m.addClass('hidden').css('display', ''); }
+
+  const $upModal = $('#matAttUploadModal');
+  const $vwModal = $('#matAttViewerModal');
+
+  let matZoom = 1;
+  let matCurrentUrl = null;
+  let matCurrentId = null;
+
+
+
+  function resetViewer() {
+    matZoom = 1;
+    matCurrentUrl = null;
+
+    $('#matPreviewFrame').addClass('hidden').css('transform', 'scale(1)').attr('src', '');
+    $('#matPreviewImgWrap').addClass('hidden');
+    $('#matPreviewImg').attr('src', '').css('transform', 'scale(1)');
+    $('#matPreviewEmpty').removeClass('hidden');
+
+    $('#matDownloadBtn').addClass('pointer-events-none opacity-50').attr('href', '#');
+  }
+
+  function applyZoom() {
+    $('#matPreviewImg').css('transform', `scale(${matZoom})`);
+    $('#matPreviewFrame').css('transform', `scale(${matZoom})`).css('transform-origin', 'top left');
+  }
+
+  function openPreview(url) {
+    resetViewer();
+    matCurrentUrl = url;
+
+    if (!url) {
+      return;
+    }
+
+    const lower = String(url).toLowerCase();
+    $('#matPreviewEmpty').addClass('hidden');
+
+    if (lower.endsWith('.pdf')) {
+      $('#matPreviewFrame').removeClass('hidden').attr('src', url);
+    } else if (/\.(jpg|jpeg|png|webp)$/i.test(lower)) {
+      $('#matPreviewImgWrap').removeClass('hidden');
+      $('#matPreviewImg').attr('src', url);
+    } else {
+      // fallback open in new tab
+      window.open(url, '_blank');
+      $('#matPreviewEmpty').removeClass('hidden');
+      return;
+    }
+
+    $('#matDownloadBtn').removeClass('pointer-events-none opacity-50').attr('href', url);
+    applyZoom();
+  }
+
+  $(document).on('click', '.mat-att-del-btn', function () {
     const id = $(this).data('id');
-    $('#gtsAttachRowId').val(id);
-    $('#gtsAttachmentForm')[0].reset();
-    $('#gtsAttachmentForm').data('mode', 'upload');
-    $('#gtsAttachmentForm button[type="submit"]').text('Save');
+    const type = $(this).data('type');
 
-    $('#gtsAttachInvoiceFilename').text('No file chosen');
-    $('#gtsAttachReceiptFilename').text('No file chosen');
-    $('#gtsAttachNoteFilename').text('No file chosen');
+    if (!id || !type) return;
+    if (!confirm(`Delete ${type} attachment?`)) return;
 
-    let hasExisting = false;
-
-    $.get(withCycle(`/gts-materials/get-attachments/${id}`), function (data) {
-      if (data.invoice) {
-        $('#gtsAttachInvoiceFilename').text(data.invoice.split('/').pop());
-        $('#gtsAttachInvoiceStatus').removeClass('hidden');
-        hasExisting = true;
-      } else {
-        $('#gtsAttachInvoiceStatus').addClass('hidden');
-      }
-      if (data.receipt) {
-        $('#gtsAttachReceiptFilename').text(data.receipt.split('/').pop());
-        $('#gtsAttachReceiptStatus').removeClass('hidden');
-        hasExisting = true;
-      } else {
-        $('#gtsAttachReceiptStatus').addClass('hidden');
-      }
-      if (data.note) {
-        $('#gtsAttachNoteFilename').text(data.note.split('/').pop());
-        $('#gtsAttachNoteStatus').removeClass('hidden');
-        hasExisting = true;
-      } else {
-        $('#gtsAttachNoteStatus').addClass('hidden');
-      }
-
-      if (hasExisting) {
-        $('#gtsAttachmentForm').data('mode', 'update');
-        $('#gtsAttachmentForm button[type="submit"]').text('Update');
-      }
-
-      $('#gtsAttachmentModal').removeClass('hidden').addClass('flex');
-    });
-  });
-
-  $('#gtsModalCloseBtn, #gtsCancelBtn').on('click', function () {
-    $('#gtsAttachmentModal').removeClass('flex').addClass('hidden');
-  });
-
-  // View Click
-  $(document).on('click.gtsmat', `${MAT_ROOT} .view-btn`, function () {
-    const row = $(this).closest('tr');
-    const id = row.data('id');
-    const invoiceNo = row.find('td:nth-child(3)').text().trim(); // Invoice No
-    const supplier = row.find('td:nth-child(4)').text().trim(); // Supplier Name
-
-    // Set modal title
-    $('#attachmentViewerTitle').text(`Invoice: ${invoiceNo} – ${supplier}`);
-
-    // Reset UI
-    const $inv = $("#viewInvoiceLink");
-    const $rec = $("#viewReceiptLink");
-    const $note = $("#viewNoteLink");
-
-    const $invName = $("#viewInvoiceName");
-    const $recName = $("#viewReceiptName");
-    const $noteName = $("#viewNoteName");
-
-    [$inv, $rec, $note].forEach($a => {
-      $a.attr("href", "#")
-        .removeClass("text-blue-600")
-        .addClass("text-gray-400")
-        .text("Not Uploaded");
-    });
-
-    [$invName, $recName, $noteName].forEach($s => $s.text(""));
-
-    // Reset download button
-    $('#matDownloadBtn')
-      .addClass('pointer-events-none opacity-50')
-      .text('Download PDF');
-
-    // Fetch data
     $.ajax({
-      url: withCycle(`/gts-materials/get-attachments/${id}`),
-      type: 'GET',
-      success: function (data) {
-        const apply = (url, $link, $name) => {
-          if (url) {
-            $link.attr('href', url)
-              .removeClass('text-gray-400')
-              .addClass('text-blue-600')
-              .text('Open');
-            $name.text(getFileName(url));
-          } else {
-            $link.attr('href', '#')
-              .removeClass('text-blue-600')
-              .addClass('text-gray-400')
-              .text('Not uploaded');
-            $name.text('');
-          }
-        };
-
-        // use each field's own URL
-        apply(data.invoice, $inv, $invName);
-        apply(data.receipt, $rec, $recName);
-        apply(data.note, $note, $noteName);
-
-        const hasAny = !!(data.invoice || data.receipt || data.note);
-        $('#matDownloadBtn')
-          .toggleClass('pointer-events-none opacity-50', !hasAny)
-          .text('Download PDF');
-
-        // Open modal (no jQuery animations)
-        $('#viewAttachmentModal')
-          .data('current-id', id)
-          .removeClass('hidden')
-          .addClass('flex')
-          .fadeIn();
-      },
-      error: function () {
-        alert('Failed to fetch attachments.');
-      }
-    });
+      url: withCycle(`/gts-materials/${id}/delete-attachment`), // adjust route
+      method: 'POST',
+      data: { type },
+      headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
+    })
+      .done((res) => {
+        // update cache + list + badge immediately
+        window.__matAttCache[id] = res?.attachments || {};
+        setUploadLabels(window.__matAttCache[id]);
+        renderExistingList(window.__matAttCache[id], id);
+        updateRowAttachmentBadge(id, window.__matAttCache[id]);
+      })
+      .fail(xhr => {
+        alert(xhr?.responseJSON?.message || 'Delete failed.');
+        console.error(xhr?.responseText || xhr);
+      });
   });
 
-  // Form Submit
-  $('#gtsAttachmentForm').on('submit', function (e) {
-    e.preventDefault();
+  // Open UPLOAD modal (open first, fetch after)
+  $(document).on('click.gtsmat', `${MAT_ROOT} .upload-btn`, function (e) {
+    e.preventDefault(); e.stopPropagation();
 
-    const $form = $(this);
-    const id = $('#gtsAttachRowId').val();
-    const formData = new FormData(this);
+    const id = $(this).data('id');
+    matCurrentId = id;
+    $('#matAttRowId').val(id);
 
-    const isUpdate = $form.data('mode') === 'update';
-    const $btn = $form.find('button[type="submit"]');
-    $btn.text(isUpdate ? 'Updating...' : 'Saving...').prop('disabled', true);
+    // reset remove flags
+    $('#matRemoveInvoice, #matRemoveReceipt, #matRemoveNote').val('0');
+
+    // reset file inputs
+    $('#matInvoiceInput, #matReceiptInput, #matNoteInput').val('');
+    setUploadLabels({ invoice: null, receipt: null, note: null });
+    $('#matExistingList').empty();
+
+    showPM($upModal);
+    fastLoadAttachments(id);
+  });
+
+  // Browse buttons
+  $(document).on('click', '[data-browse="invoice"]', () => $('#matInvoiceInput').trigger('click'));
+  $(document).on('click', '[data-browse="receipt"]', () => $('#matReceiptInput').trigger('click'));
+  $(document).on('click', '[data-browse="note"]', () => $('#matNoteInput').trigger('click'));
+
+  // Dropzone click
+  $(document).on('click', '.pm-dropzone[data-pick="invoice"]', (e) => {
+    if ($(e.target).closest('button').length) return;
+    $('#matInvoiceInput').trigger('click');
+  });
+  $(document).on('click', '.pm-dropzone[data-pick="receipt"]', (e) => {
+    if ($(e.target).closest('button').length) return;
+    $('#matReceiptInput').trigger('click');
+  });
+  $(document).on('click', '.pm-dropzone[data-pick="note"]', (e) => {
+    if ($(e.target).closest('button').length) return;
+    $('#matNoteInput').trigger('click');
+  });
+
+  // File label updates
+  $('#matInvoiceInput').on('change', function () { $('#matInvoiceLabel').text(this.files?.[0]?.name || 'No file selected yet.'); $('#matRemoveInvoice').val('0'); });
+  $('#matReceiptInput').on('change', function () { $('#matReceiptLabel').text(this.files?.[0]?.name || 'No file selected yet.'); $('#matRemoveReceipt').val('0'); });
+  $('#matNoteInput').on('change', function () { $('#matNoteLabel').text(this.files?.[0]?.name || 'No file selected yet.'); $('#matRemoveNote').val('0'); });
+
+  // Upload submit button
+  $('#matAttUploadBtn').on('click', function () {
+    const id = $('#matAttRowId').val();
+    if (!id) return;
+
+    const fd = new FormData($('#matAttUploadForm')[0]);
+
+    const $btn = $(this);
+    $btn.prop('disabled', true).addClass('opacity-70 pointer-events-none').html(`<i class="bi bi-arrow-repeat animate-spin"></i> Uploading...`);
 
     $.ajax({
       url: withCycle(`/gts-materials/upload-attachments/${id}`),
-      type: 'POST',
-      data: formData,
+      method: 'POST',
+      data: fd,
       processData: false,
       contentType: false,
       headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
     })
       .done(function (res) {
-        // Safe fallback so we never alert "undefined"
+        window.__matAttCache[id] = res?.attachments ?? window.__matAttCache[id] ?? {};
+        updateRowAttachmentBadge(id, window.__matAttCache[id]);
+
         alert(res?.message ?? 'Attachments saved.');
-        $('#gtsAttachmentModal').removeClass('flex').addClass('hidden');
-        loadGtsMaterials(); // refresh table
+        hidePM($upModal);
+        fastLoadAttachments(id);
+        loadGtsMaterials(); // refresh list/buttons state
       })
       .fail(function (xhr) {
-        const msg = xhr?.responseJSON?.message || xhr?.statusText || 'Upload failed.';
-        alert(msg);
+        alert(xhr?.responseJSON?.message || 'Upload failed.');
+        console.error(xhr?.responseText || xhr);
       })
       .always(function () {
-        $btn.text(isUpdate ? 'Update' : 'Save').prop('disabled', false);
+        $btn.prop('disabled', false).removeClass('opacity-70 pointer-events-none').html(`<i class="bi bi-cloud-arrow-up"></i> Upload`);
       });
+  });
+
+  // Close upload modal
+  $('#matAttUploadClose, #matAttUploadCancel, #matAttUploadBackdrop')
+    .off('click.matUpClose')
+    .on('click.matUpClose', function () { hidePM($upModal); });
+
+  // Open VIEWER modal
+  $(document).on('click.gtsmat', `${MAT_ROOT} .view-btn`, function (e) {
+    e.preventDefault(); e.stopPropagation();
+
+    const id = $(this).data('id');
+    matCurrentId = id;
+
+    resetViewer();
+    $('#matViewerList').empty();
+    $('#matViewerSubTitle').text(`Row ID: ${id}`);
+
+    // Download all uses your existing endpoint
+    $('#matDownloadAllBtn').attr('href', withCycle(`/gts-materials/download-pdf/${id}`));
+
+    showPM($vwModal);
+
+    $.get(withCycle(`/gts-materials/get-attachments/${id}`))
+      .done(function (data) {
+        const items = [
+          { label: 'Invoice', url: normalizeAttUrl(data?.invoice) },
+          { label: 'Bank Receipt', url: normalizeAttUrl(data?.receipt) },
+          { label: 'Delivery Note', url: normalizeAttUrl(data?.note) },
+        ];
+
+        const $list = $('#matViewerList').empty();
+
+        items.forEach((it) => {
+          const disabled = !it.url;
+          const $btn = $(`
+          <button type="button"
+            class="w-full text-left border border-slate-200 rounded-xl px-3 py-2 hover:bg-slate-50 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}">
+            <div class="text-sm font-semibold">${it.label}</div>
+            <div class="text-xs pm-subtext truncate">${it.url ? getFileName(it.url) : 'Not uploaded'}</div>
+          </button>
+        `);
+
+          if (!disabled) {
+            $btn.on('click', function () {
+              // highlight
+              $('#matViewerList button').removeClass('ring-2 ring-slate-400');
+              $btn.addClass('ring-2 ring-slate-400');
+              openPreview(it.url);
+            });
+          }
+
+          $list.append($btn);
+        });
+      })
+      .fail(function () {
+        console.warn('material viewer get failed', id);
+      });
+  });
+
+  // Zoom controls
+  $('#matZoomIn').on('click', function () { matZoom = Math.min(3, matZoom + 0.1); applyZoom(); });
+  $('#matZoomOut').on('click', function () { matZoom = Math.max(0.5, matZoom - 0.1); applyZoom(); });
+  $('#matZoomReset').on('click', function () { matZoom = 1; applyZoom(); });
+  $('#matZoomFit').on('click', function () {
+    // simple fit for images: keep scale at 1 (safe). If you want “true fit”, tell me and I’ll add image-size calc.
+    matZoom = 1;
+    applyZoom();
+  });
+
+  // Download current file (single)
+  $('#matDownloadBtn').on('click', function (e) {
+    const href = $(this).attr('href');
+    if (!href || href === '#') { e.preventDefault(); return; }
+    // allow normal download/open
+  });
+
+  // Close viewer modal
+  $('#matAttViewerClose, #matAttViewerBackdrop')
+    .off('click.matVwClose')
+    .on('click.matVwClose', function () { hidePM($vwModal); });
+
+  $(document).on('click', '#viewInvoiceLink, #viewReceiptLink, #viewNoteLink', function (e) {
+    const href = $(this).attr('href');
+    if (!href || href === '#') return;
+    e.preventDefault();
+    renderPreview('#matPreview', href);
   });
 
   // Materials
   $(document).on('click', '#matDownloadBtn', function () {
     const id = $('#viewAttachmentModal').data('current-id');
     if (id) window.open(withCycle(`/gts-materials/download-pdf/${id}`), '_blank');
-  });
-
-  $('#closeMaterialViewModal, #closeMaterialViewModalBottom').on('click', function () {
-    $("#viewAttachmentModal").fadeOut(300, function () {
-      $(this).addClass("hidden").removeClass("flex");
-    });
-  });
-
-  // ONE watcher for change detection in Materials
-  $(document).on('input change', `${MAT_ROOT} ${DETAIL_SEL} input, ${MAT_ROOT} ${DETAIL_SEL} textarea`, function () {
-    const $detailRow = $(this).closest('.detail-row');
-    if ($detailRow.attr('data-loaded') === 'true' || $detailRow.hasClass('submitted')) {
-      toggleUpdateButtonForDetail($detailRow);
-    }
   });
 
   // Submit updates from the Action icon (bind once, namespaced)
@@ -943,22 +1154,44 @@ function initMaterialLogic() {
       e.preventDefault();
       e.stopPropagation(); // don't trigger header-row expand/collapse
 
-      const $headerRow = $(this).closest('tr.header-row');
-      const $detailRow = $headerRow.next('.detail-row');
+      const $btn = $(this);
+      if ($btn.data('loading')) return; // block double clicks
+
+      const $headerRow = $btn.closest('tr.header-row');
+      const $detailRow = $headerRow.next(DETAIL_SEL);
       const id = $headerRow.data('id');
-      if (!id) return;
+      if (!id || !$detailRow.length) return;
+
+      // If set is closed, never allow update
+      if (typeof IS_CLOSED !== "undefined" && IS_CLOSED) return;
+
+      // Ensure snapshot exists before doing anything
+      if (!$detailRow.data('snapshot')) {
+        $detailRow.data('snapshot', buildMaterialSnapshot($detailRow));
+      }
 
       // make sure totals are fresh
       calculateRowTotals($detailRow, $headerRow);
 
       const totalMaterialBuy =
-        parseFloat(String($detailRow.find('.total-material-buy').text()).replace(/[^0-9.\-]/g,'')) || 0;
+        parseFloat(String($detailRow.find('.total-material-buy').text()).replace(/[^0-9.\-]/g, '')) || 0;
 
       const uiTotalMaterial =
-        parseFloat(String($headerRow.find('.header-total-material').text()).replace(/[^0-9.\-]/g,'')) || 0;
+        parseFloat(String($headerRow.find('.header-total-material').text()).replace(/[^0-9.\-]/g, '')) || 0;
+
+      // ----- header fields (editable for draft rows) -----
+      const invoice_date = ($headerRow.find('.draft-invoice-date').val() || '').trim();
+      const invoice_no = ($headerRow.find('.draft-invoice-no').val() || '').trim();
+      const supplier_name = ($headerRow.find('.draft-supplier-name').val() || '').trim();
+      const brief_description = ($headerRow.find('.draft-brief-description').val() || '').trim();
 
       // payload expected by your controller
       const payload = {
+        invoice_date,
+        invoice_no,
+        supplier_name,
+        brief_description,
+
         mode_of_transaction: ($detailRow.find('input[placeholder="Enter Transaction Method"]').val() || '').trim(),
         receipt_no: ($detailRow.find('textarea.receipt-no-textarea').val() || '').trim(),
         remarks: ($detailRow.find('textarea[placeholder="Enter Remarks"]').val() || '').trim(),
@@ -987,55 +1220,84 @@ function initMaterialLogic() {
         payload.materials.push(m);
       });
 
+      // lock UI + spinner
+      setUpdateBtnLoading($btn, true);
+
       $.ajax({
-        url: `/gts-materials/${id}`,
+        url: withCycle(`/gts-materials/${id}`),
         method: 'PUT',
         headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') },
-        data: payload
+        data: payload,
+        timeout: 20000
       })
-        .done(function () {
-          // refresh snapshot to the just-saved state
-          $detailRow.data('snapshot', {
-            mot: String(payload.mode_of_transaction ?? '').trim(),
-            receipt: String(payload.receipt_no ?? '').trim(),
-            remarks: String(payload.remarks ?? '').trim(),
-            shipping: String($detailRow.find('[data-field="shippingCost"]').val() ?? '').trim(),
-            dgd: String($detailRow.find('[data-field="dgd"]').val() ?? '').trim(),
-            labour: String($detailRow.find('[data-field="labour"]').val() ?? '').trim(),
-            items: payload.materials.map(m => ({
-              id: m.id || null,
-              desc: String(m.description ?? '').trim(),
-              units: String(m.units ?? '').trim(),
-              unit: String(m.unit_price ?? '').trim(),
-              vat: String(m.vat ?? '').trim(),
-              wctn: String(m.weight_per_ctn ?? '').trim(),
-              ctns: String(m.ctns ?? '').trim()
-            }))
-          });
+        .done(function (res) {
+          $detailRow.find('.supplier-title').text(payload.supplier_name);
+          $detailRow.find('.invoice-no-label').text(payload.invoice_no);
 
-          // hide the icon + flash success
-          setMaterialRowDirty($detailRow, false);
+          // refresh snapshot to the just-saved state
+          $detailRow.data('snapshot', buildMaterialSnapshot($detailRow));
+
+          // remove update button
+          toggleUpdateButtonForDetail($detailRow);
+
           const $cell = $headerRow.find('td:last').addClass('bg-green-50');
           setTimeout(() => $cell.removeClass('bg-green-50'), 600);
 
           calculateRowTotals($detailRow, $headerRow);
-
-          // repaint the top cards based on the DOM totals
           paintCardsFromDOM('update');
         })
         .fail(function (xhr) {
-          alert(xhr?.responseJSON?.message || 'Update failed.');
+          const msg =
+            xhr?.responseJSON?.message ||
+            xhr?.responseText ||
+            'Update failed.';
+          alert(msg);
           console.error(xhr?.responseText || xhr);
+
+          // keep update icon visible if still dirty
+          toggleUpdateButtonForDetail($detailRow);
+        })
+        .always(function () {
+          // unlock UI
+          setUpdateBtnLoading($btn, false);
         });
     });
 
-  // Any input change inside a material detail row => re-check diff
-  $(document).on('input change', `${MAT_ROOT} ${DETAIL_SEL} input, ${MAT_ROOT} ${DETAIL_SEL} textarea`, function () {
-    const $detailRow = $(this).closest('.detail-row');
-    if ($detailRow.attr('data-loaded') === 'true' || $detailRow.hasClass('submitted')) {
-      toggleUpdateButtonForDetail($detailRow);
-    }
-  });
+  const MAT_CONTAINER = `${MAT_ROOT}, #materialTableBody`;
+
+  $(document)
+    .off('input.changeDetect change.changeDetect')
+    .on(
+      'input.changeDetect change.changeDetect',
+      `
+        ${MAT_CONTAINER} ${DETAIL_SEL} input, 
+        ${MAT_CONTAINER} ${DETAIL_SEL} textarea,
+        ${MAT_CONTAINER} tr.header-row .draft-invoice-date,
+        ${MAT_CONTAINER} tr.header-row .draft-invoice-no,
+        ${MAT_CONTAINER} tr.header-row .draft-supplier-name,
+        ${MAT_CONTAINER} tr.header-row .draft-brief-description
+       `,
+      function () {
+        // if change came from header input, find its detail row
+        let $detailRow = $(this).closest(DETAIL_SEL);
+        if (!$detailRow.length) {
+          const $headerRow = $(this).closest('tr.header-row');
+          $detailRow = $headerRow.next(DETAIL_SEL);
+        }
+        if (!$detailRow.length) return;
+
+        const isSaved = $detailRow.attr('data-loaded') === 'true' || $detailRow.hasClass('submitted');
+        if (!isSaved) return;
+
+        // if snapshot missing, create it once
+        if (!$detailRow.data('snapshot')) {
+          $detailRow.data('snapshot', buildMaterialSnapshot($detailRow));
+          return;
+        }
+
+        toggleUpdateButtonForDetail($detailRow);
+      }
+    );
 
   // Recalc + re-format the summary footer whenever Shipping/DGD/Labour change
   $(document).off('input.materialShip change.materialShip')
@@ -1059,7 +1321,7 @@ function updateFileLabel(inputId, labelId) {
   const name = el && el.files && el.files[0] ? el.files[0].name : 'No file chosen';
   document.getElementById(labelId).textContent = name;
 }
-$(document).on('change', '#gtsAttachInvoice', () => updateFileLabel('gtsAttachInvoice', 'gtsAttachInvoiceFilename'));
+
 $(document).on('change', '#gtsAttachReceipt', () => updateFileLabel('gtsAttachReceipt', 'gtsAttachReceiptFilename'));
 $(document).on('change', '#gtsAttachNote', () => updateFileLabel('gtsAttachNote', 'gtsAttachNoteFilename'));
 
@@ -1106,6 +1368,29 @@ function vatAmount(base, vatRaw) {
 function stripZeros(n) {
   const s = String(n);
   return s.includes('.') ? s.replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1') : s;
+}
+
+function setUpdateBtnLoading($btn, loading) {
+  if (!$btn || !$btn.length) return;
+
+  if (loading) {
+    if ($btn.data('loading')) return; // already loading
+    $btn.data('loading', true);
+
+    $btn.data('oldHtml', $btn.html());
+    $btn.prop('disabled', true).addClass('opacity-70 pointer-events-none');
+
+    // replace icon with spinner
+    $btn.html(`
+      <i class="bi bi-arrow-repeat animate-spin" style="font-size:16px;line-height:1"></i>
+    `);
+  } else {
+    $btn.data('loading', false);
+    $btn.prop('disabled', false).removeClass('opacity-70 pointer-events-none');
+
+    const old = $btn.data('oldHtml');
+    if (old) $btn.html(old);
+  }
 }
 
 // MAIN: recompute all live numbers for a detail + header
@@ -1174,32 +1459,37 @@ function calculateRowTotals($detailRow, $headerRow) {
 
   // Paint detail footer: weights & units
   $detailRow.find(".total-weight-kg").text(
-    totalWeight.toLocaleString(undefined, { minimumFractionDigits: 2 })
+    totalWeight.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 7 })
   );
   $detailRow.find(".total-units").text(totalUnits.toLocaleString());
 
   // 5% VAT on total material (without VAT)
   const computedVat = totalMaterialNoVAT * 0.05;
 
+  // use AED 7dp for detail/footer and header cells
+  const writeAED7 = (sel, val) => {
+    $detailRow.find(sel).text(fmtAED7(val));
+  };
+
   // Footer money cells
-  writeCurrency($detailRow, ".total-vat", computedVat);
-  writeCurrency($detailRow, ".total-material-buy", totalMaterialBuy);
-  writeCurrency($detailRow, ".total-material-without-vat", totalMaterialNoVAT);
-  writeCurrency($detailRow, ".shipping-cost-value", shippingCost);
-  writeCurrency($detailRow, ".dgd-value", dgd);
-  writeCurrency($detailRow, ".labour-value", labour);
+  writeAED7(".total-vat", computedVat);
+  writeAED7(".total-material-buy", totalMaterialBuy);
+  writeAED7(".total-material-without-vat", totalMaterialNoVAT);
+  writeAED7(".shipping-cost-value", shippingCost);
+  writeAED7(".dgd-value", dgd);
+  writeAED7(".labour-value", labour);
 
   // *** THE FIX: total shipping = shipping + dgd + labour ***
-  writeCurrency($detailRow, ".total-shipping-cost", totalShipping);
+  $detailRow.find(".total-shipping-cost").text(fmtAED7(totalShipping));
 
   // Header paints
-  writeCurrency($headerRow, ".header-total-material", totalMaterialBuy);
-  writeCurrency($headerRow, ".header-total-shipping", totalShipping);
+  $headerRow.find(".header-total-material").text(fmtAED7(totalMaterialBuy));
+  $headerRow.find(".header-total-shipping").text(fmtAED7(totalShipping));
 
   // Defensive final paint so no legacy code overwrites it
   queueMicrotask(() => {
-    writeCurrency($detailRow, ".total-shipping-cost", totalShipping);
-    writeCurrency($headerRow, ".header-total-shipping", totalShipping);
+    $detailRow.find(".total-shipping-cost").text(fmtAED7(totalShipping));
+    $headerRow.find(".header-total-shipping").text(fmtAED7(totalShipping));
   });
 
   // Notify rest of app / caches (one call is enough)
@@ -1249,7 +1539,7 @@ function updateInvestmentTotals(investmentTotal) {
 }
 
 function formatCurrency(value) {
-  return window.gtsFmt.aed(value);
+  return fmtAED7(value);
 }
 
 function loadGtsMaterials() {
@@ -1267,20 +1557,12 @@ function loadGtsMaterials() {
       const id = entry.id;
       const serialNo = index + 1;
       const num = (v) => Number(String(v ?? 0).replace(/[^0-9.\-]/g, '')) || 0;
-
-      // Format the date
-      const date = new Date(entry.invoice_date);
-      const formattedDate = date.toLocaleDateString("en-GB", {
-        weekday: "long",
-        day: "2-digit",
-        month: "long",
-        year: "numeric"
-      });
+      const attCount = [entry.invoice_path, entry.receipt_path, entry.note_path].filter(Boolean).length;
 
       const actionButtons = IS_CLOSED ? '' : `
-        <div class="action-buttons flex justify-center gap-1">
+        <div class="action-buttons flex justify-center gap-1 items-center">
           ${createMaterialIcon('upload-btn', 'bi-cloud-arrow-up-fill', 'Upload Attachments', 'bg-blue-500 hover:bg-blue-600 text-white', id)}
-          ${createMaterialIcon('view-btn', 'bi-paperclip', 'View Attachments', 'bg-gray-700 hover:bg-gray-800 text-white', id)}
+          ${createMaterialIcon('view-btn', 'bi-paperclip', 'View Attachments', 'bg-gray-800 hover:bg-gray-900 text-white', id, String(attCount))}
           ${createMaterialIcon('delete-material-btn', 'bi-trash-fill', 'Delete Row', 'bg-red-500 hover:bg-red-600 text-white', id)}
         </div>
       `;
@@ -1299,14 +1581,45 @@ function loadGtsMaterials() {
 
       const COLS = IS_CLOSED ? 7 : 8;
 
+      const isDraft = (entry.status ?? '') === 'draft';
+
+      const isoDate = entry.invoice_date ? String(entry.invoice_date).slice(0, 10) : '';
+
+      const headerFieldsHtml = isDraft && !IS_CLOSED
+        ? `
+        <td class="border p-2">
+            <span class="mh-date-text block ${IS_CLOSED ? '' : 'cursor-pointer'}">
+              ${formatLongDate(isoDate)}
+            </span>
+            <input type="date"
+                  class="mh-invoice-date w-full bg-transparent outline-none hidden"
+                  value="${isoDate}" ${IS_CLOSED ? 'disabled' : ''}>
+        </td>
+        <td class="border p-2">
+          <input type="text" class="draft-invoice-no w-full bg-transparent outline-none"
+                value="${escapeHtml(entry.invoice_no ?? '')}">
+        </td>
+        <td class="border p-2">
+          <input type="text" class="draft-supplier-name w-full bg-transparent outline-none"
+                value="${escapeHtml(entry.supplier_name ?? '')}">
+        </td>
+        <td class="border p-2">
+          <input type="text" class="draft-brief-description w-full bg-transparent outline-none"
+                value="${escapeHtml(entry.brief_description ?? '')}">
+        </td>
+      `
+        : `
+        <td class="border p-2">${formattedDate}</td>
+        <td class="border p-2">${entry.invoice_no ?? '-'}</td>
+        <td class="border p-2">${escapeHtml(entry.supplier_name ?? '')}</td>
+        <td class="border p-2">${escapeHtml(entry.brief_description ?? '')}</td>
+      `;
+
       // Create header row
       const $headerRow = $(`
         <tr class="header-row cursor-pointer hover:bg-gray-100" data-id="${id}" data-loaded="true">
           <td class="border p-2 text-center">${serialNo}</td>
-          <td class="border p-2">${formattedDate}</td>
-          <td class="border p-2">${entry.invoice_no ?? '-'}</td>
-          <td class="border p-2">${entry.supplier_name}</td>
-          <td class="border p-2">${entry.brief_description}</td>
+          ${headerFieldsHtml}
           <td class="border p-2 header-total-material">${formatCurrency(headerMat)}</td>
           <td class="border p-2 header-total-shipping">${formatCurrency(headerShip)}</td>
           ${IS_CLOSED ? '' : `<td class="border p-2 text-center">
@@ -1390,6 +1703,8 @@ function loadGtsMaterials() {
                     type="number"
                     value="0"
                     min="0"
+                    step="0.0000001"
+                    inputmode="decimal"
                     data-field="shippingCost"
                     class="shipping-input w-full bg-yellow-100 border-0 focus:outline-none"
                   />
@@ -1403,6 +1718,8 @@ function loadGtsMaterials() {
                     type="number"
                     value="0"
                     min="0"
+                    step="0.0000001"
+                    inputmode="decimal"
                     data-field="dgd"
                     class="shipping-input flex-1 bg-yellow-100 border-0 focus:outline-none"
                   />
@@ -1416,6 +1733,8 @@ function loadGtsMaterials() {
                     type="number"
                     value="0"
                     min="0"
+                    step="0.0000001"
+                    inputmode="decimal"
                     data-field="labour"
                     class="shipping-input flex-1 bg-yellow-100 border-0 focus:outline-none"
                   />
@@ -1458,7 +1777,7 @@ function loadGtsMaterials() {
 
       // Update summary fields inside detail row
       $detailRow.find('.total-weight-kg').text(entry.total_weight || 0);
-      $detailRow.find('.total-vat').text((entry.vat_display ?? '0'));
+      $detailRow.find('.total-vat').text(formatCurrency(entry.total_vat ?? 0));
       $detailRow.find('.total-material-buy').text(formatCurrency(entry.total_material_buy));
       $detailRow.find('.dgd-value').text(formatCurrency(entry.dgd));
       $detailRow.find('.labour-value').text(formatCurrency(entry.labour));
@@ -1507,8 +1826,8 @@ function loadGtsMaterials() {
           // Calculated
           const totalMaterial = (item.unit_price || 0) * (item.units || 0);
           const totalWeight = (item.weight_per_ctn || 0) * (item.ctns || 0);
-          $row.find('.total-material').text((totalMaterial).toFixed(2));
-          $row.find('.total-weight').text((totalWeight).toFixed(2));
+          $row.find('.total-material').text(fmtNum7(totalMaterial));
+          $row.find('.total-weight').text(fmtNum7(totalWeight));
 
           $itemTableBody.append($row);
         });
@@ -1558,16 +1877,25 @@ function updateGtsTotalsFromDOM() {
 }
 
 // Materials-only icon button factory (does not collide with Investment's createIconButton)
-function createMaterialIcon(type, iconClass, tooltipText, btnClass = '', dataId = '') {
-  // normalize icon class -> allow "bi-arrow-repeat" or "bi bi-arrow-repeat"
+function createMaterialIcon(type, iconClass, tooltipText, btnClass = '', dataId = '', badgeText = '') {
   const icon = String(iconClass || '').trim();
   const finalIcon = icon.startsWith('bi ') ? icon : `bi ${icon}`;
 
+  const badgeHtml = badgeText !== '' ? `
+    <span class="mat-att-dot absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1
+      rounded-full bg-red-600 text-white text-[11px] font-bold
+      flex items-center justify-center leading-none">
+      ${badgeText}
+    </span>` : '';
+
   return `
     <div class="relative group inline-block">
-      <button class="${type} ${btnClass} px-2 py-1 rounded text-sm" data-id="${dataId}">
+      <button class="${type} ${btnClass} h-8 w-8 p-0 rounded text-sm flex items-center justify-center relative"
+              data-id="${dataId}" type="button">
         <i class="${finalIcon}" style="font-size:16px;line-height:1"></i>
+        ${badgeHtml}
       </button>
+
       <div class="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-1
                   scale-0 group-hover:scale-100 transition duration-200
                   bg-black text-white text-xs px-2 py-1 rounded pointer-events-none z-10 whitespace-nowrap">
@@ -1577,55 +1905,34 @@ function createMaterialIcon(type, iconClass, tooltipText, btnClass = '', dataId 
   `;
 }
 
-function setMaterialRowDirty($detailRow, dirty) {
-  const $headerRow = $detailRow.prev('.header-row');
-  if (!$headerRow.length) return;
+// function setMaterialRowDirty($detailRow, dirty) {}
 
-  const id = $headerRow.data('id');
-
-  // Rebuild default action buttons (upload, view, delete)
-  const defaultActions = `
-  <div class="action-buttons flex justify-center gap-1">
-    ${createMaterialIcon('upload-btn', 'bi-cloud-arrow-up-fill', 'Upload Attachments', 'bg-blue-500 hover:bg-blue-600 text-white', id || '')}
-    ${createMaterialIcon('view-btn', 'bi-paperclip', 'View Attachments', 'bg-gray-700 hover:bg-gray-800 text-white', id || '')}
-    ${createMaterialIcon('delete-material-btn', 'bi-trash-fill', 'Delete Row', 'bg-red-500 hover:bg-red-600 text-white', id || '')}
-  </div>`;
-
-  const saveBtn = createMaterialIcon(
-    'update-row-btn',
-    'bi-arrow-repeat',              // <<< your preferred icon
-    'Update Row',
-    'bg-green-600 hover:bg-green-700 text-white',
-    id || ''
-  );
-
-  const $cell = $headerRow.find('td:last > div');
-  if (!$cell.length) return;
-
-  if (dirty) {
-    // Show Save button to the LEFT of the normal actions (no duplicates)
-    if ($headerRow.find('.update-row-btn').length === 0) {
-      $cell.prepend(saveBtn);
-    }
-  } else {
-    // Remove save button if no changes
-    $headerRow.find('.update-row-btn').remove();
-    // Ensure default actions exist (in case of previous replacements)
-    if (!$cell.find('.upload-btn').length) $cell.html(defaultActions);
-  }
-}
-
-// Build a snapshot of a detail row for change detection
+// Build a snapshot of a detail row for change detection (includes header + detail)
 function buildMaterialSnapshot($detailRow) {
-  const t = v => (v == null ? '' : String(v).trim()); // store typed text
+  const t = v => (v == null ? '' : String(v).trim());
+  const normTextArea = v => t((v || '').replace(/\r/g, '')); // keep your \r fix
+
+  const $headerRow = $detailRow.prev('.header-row');
+
+  const header = {
+    invoice_date: t($headerRow.find('.draft-invoice-date').val()),
+    invoice_no: t($headerRow.find('.draft-invoice-no').val()),
+    supplier_name: t($headerRow.find('.draft-supplier-name').val()),
+    brief_description: t($headerRow.find('.draft-brief-description').val()),
+  };
 
   const snap = {
+    header,
     mot: t($detailRow.find('input[placeholder="Enter Transaction Method"]').val()),
-    receipt: t(($detailRow.find('textarea.receipt-no-textarea, textarea[placeholder="Enter receipt numbers"]').val() || '').replace(/\r/g, '')),
-    remarks: t($detailRow.find('textarea[placeholder="Enter Remarks"]').val()),
-    shipping: t($detailRow.find('input[data-field="shippingCost"]').val()),
-    dgd: t($detailRow.find('input[data-field="dgd"]').val()),
-    labour: t($detailRow.find('input[data-field="labour"]').val()),
+    receipt: normTextArea(
+      $detailRow
+        .find('textarea.receipt-no-textarea, textarea[placeholder="Enter receipt numbers"]')
+        .val()
+    ),
+    remarks: normTextArea($detailRow.find('textarea[placeholder="Enter Remarks"]').val()),
+    shipping: t($detailRow.find('input[data-field="shippingCost"], [data-field="shippingCost"]').val()),
+    dgd: t($detailRow.find('input[data-field="dgd"], [data-field="dgd"]').val()),
+    labour: t($detailRow.find('input[data-field="labour"], [data-field="labour"]').val()),
     items: []
   };
 
@@ -1647,9 +1954,10 @@ function buildMaterialSnapshot($detailRow) {
 
 // Compare current vs snapshot (numeric-safe)
 function isDetailChanged($detailRow) {
-  const prev = $detailRow.data('snapshot') || {};
-  const curr = buildMaterialSnapshot($detailRow);
-  return JSON.stringify(prev) !== JSON.stringify(curr);
+  const snap = $detailRow.data('snapshot');
+  if (!snap) return false;
+  const cur = buildMaterialSnapshot($detailRow);
+  return JSON.stringify(snap) !== JSON.stringify(cur);
 }
 
 // Ensure the icon exists once in Action cell when changed; remove when not
@@ -1669,6 +1977,9 @@ function toggleUpdateButtonForDetail($detailRow) {
     $wrap.append($actionCell.children().detach());
     $actionCell.empty().append($wrap);
   }
+
+  // DEDUPE: if duplicated icons exist, keep only the first
+  $wrap.find('.update-row-btn').slice(1).remove();
 
   if (changed) {
     if (!$wrap.find('.update-row-btn').length) {
@@ -1705,13 +2016,13 @@ function paintCardsFromDOM(origin) {
 // Show up to 7 decimals, trim trailing zeros
 function fmtNum7(n) {
   const v = Number(n) || 0;
-  return v.toLocaleString('en-AE', { minimumFractionDigits: 0, maximumFractionDigits: 7 });
+  return v.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 7 });
 }
 
 // AED with up to 7 dp (detail/footer/header cells). KPIs can keep 2dp elsewhere.
 function fmtAED7(n) {
   const v = Number(n) || 0;
-  return 'AED ' + v.toLocaleString('en-AE', { minimumFractionDigits: 0, maximumFractionDigits: 7 });
+  return 'AED ' + v.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 7 });
 }
 
 function initInvestmentLogic() {
@@ -1763,29 +2074,42 @@ function initInvestmentLogic() {
     $(this).next(".investment-detail-row").toggleClass("hidden");
   });
 
-  $(document).on("input", ".investment-amount", function () {
-    const $input = $(this);
-    const rawValue = $input.val().trim().replace(/,/g, "");
-    const numericValue = parseFloat(rawValue);
+  // one bind, namespaced
+  $(document)
+    .off('input.invAmt')
+    .on('input.invAmt', '.investment-amount', function () {
+      const $input = $(this);
+      const raw = String($input.val() || '').replace(/,/g, '');
+      const n = parseFloat(raw);
 
-    const $headerRow = $input.closest("tr").prev(".investment-header");
+      const $detailTr = $input.closest('tr');                // investment-detail-row
+      const $headerRow = $detailTr.prev('.investment-header');
 
-    if (!isNaN(numericValue)) {
-      $input.data("numericValue", numericValue);
+      const display = isNaN(n) ? fmtAED7(0) : fmtAED7(n);
+      $input.data('numericValue', isNaN(n) ? 0 : n);
 
-      // Update header's amount cell live
-      const formatted = numericValue.toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      });
-      $headerRow.find("td").eq(3).text(`AED ${formatted}`);
-    } else {
-      $headerRow.find("td").eq(3).text(`AED 0.00`);
-      $input.data("numericValue", 0);
-    }
+      // Prefer the span, fallback to td (0-based index 3)
+      const $span = $headerRow.find('.investment-amount-display');
+      if ($span.length) {
+        $span.text(display);
+      } else {
+        $headerRow.find('td').eq(3).text(display);
+      }
 
-    fetchAndUpdateInvestmentTotal(); // also update top total live
-  });
+      // lighter: debounce the server hit while typing
+      debounceFetchInvTotal();
+    });
+
+  // simple debounce helper (300ms)
+  let _invFetchTO = null;
+  function debounceFetchInvTotal(ms = 300) {
+    clearTimeout(_invFetchTO);
+    _invFetchTO = setTimeout(() => {
+      if (typeof fetchAndUpdateInvestmentTotal === 'function') {
+        fetchAndUpdateInvestmentTotal();
+      }
+    }, ms);
+  }
 
   // It show murabahaInput at top if it have any value
   $(document).on("input", "#murabahaInput", function () {
@@ -2077,7 +2401,7 @@ function initInvestmentLogic() {
     const investor = row.find('td:nth-child(3)').text().trim();
 
     // Set modal title
-    $('#attachmentViewerTitle').text(`ID: ${id} – ${investor}`);
+    $('#invAttachmentViewerTitle').text(`ID: ${id} – ${investor}`);
 
     // Reset links and names
     const $inv = $("#iviewInvoiceLink");
@@ -2269,8 +2593,7 @@ function initInvestmentLogic() {
       })
         .done(function () {
           // header refresh
-          const formattedAmt = `AED ${Number(payload.investment_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-          $headerRow.find('.investment-amount-display').text(formattedAmt);
+          $headerRow.find('.investment-amount-display').text(fmtAED7(payload.investment_amount || 0));
           $headerRow.find('.payment-method-display').text(payload.payment_method || '—');
 
           // reset baseline + remove icon
@@ -2324,8 +2647,8 @@ function getFileName(url) {
 
 function isClosed() {
   return !!window.__SET_IS_CLOSED ||
-         (window.cycle && window.cycle.status === 'closed') ||
-         document.documentElement.classList.contains('is-cycle-closed');
+    (window.cycle && window.cycle.status === 'closed') ||
+    document.documentElement.classList.contains('is-cycle-closed');
 }
 
 function createInvestmentLayout(
@@ -2349,7 +2672,7 @@ function createInvestmentLayout(
   const serialNo = $("#investmentTableBody tr.investment-header").length + 1;
 
   // Format with commas
-  const formattedAmount = `AED ${investmentAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const formattedAmount = fmtAED7(investmentAmount || 0);
 
   const dateObj = new Date(investmentDate);
   const formattedDate = isNaN(dateObj)
@@ -2360,7 +2683,7 @@ function createInvestmentLayout(
       month: "long",
       year: "numeric",
     });
-  
+
   const showActions = !isClosed();
 
   const actionButtons = showActions ? `
@@ -2416,7 +2739,7 @@ function createInvestmentLayout(
             </div>
             <div>
               <label class="block text-sm font-medium mb-1">Investment Amount</label>
-              <input type="number" min="0" placeholder="e.g., 10000" value="${escapeHtml(investmentAmount)}" class="investment-amount w-full bg-yellow-100 px-3 py-2 rounded editable-field" />
+              <input type="number" step="any" inputmode="decimal" min="0" placeholder="e.g., 10000" value="${escapeHtml(investmentAmount)}" class="investment-amount w-full bg-yellow-100 px-3 py-2 rounded editable-field" />
             </div>
             <div>
               <label class="block text-sm font-medium mb-1">Investment No.</label>

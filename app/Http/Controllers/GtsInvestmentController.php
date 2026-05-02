@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Log;
 use App\Support\ActiveCycle;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\DB;
 
 class GtsInvestmentController extends Controller
 {
@@ -59,22 +60,26 @@ class GtsInvestmentController extends Controller
 
     public function update(Request $request, $id)
     {
-        $investment = $this->findInActiveCycleOrFail($request, $id);
-        $investment->update([
-            'date' => $request->date,
-            'investor' => $request->investor,
-            'investment_amount' => $request->investment_amount,
-            'investment_no' => $request->investment_no,
-            'mode_of_transaction' => $request->mode_of_transaction,
-            'murabaha' => $request->murabaha,
-            'repayment_terms' => $request->repayment_terms,
-            'loan_tenure' => $request->loan_tenure,
-            'repayment_date' => $request->repayment_date,
-            'remarks' => $request->remarks,
-            'payment_method' => $request->payment_method,
+        $inv = $this->findInActiveCycleOrFail($request, $id);
+
+        // accept strings; Eloquent cast will normalize to 7-dp string on output
+        $inv->update([
+            'date'               => $request->date,
+            'investor'           => $request->investor,
+            'investment_amount'  => $request->investment_amount ?? 0, // keep as numeric-ish string
+            'investment_no'      => $request->investment_no ?: null,
+            'mode_of_transaction' => $request->mode_of_transaction ?: null,
+            'murabaha'           => $request->murabaha ?: null,
+            'repayment_terms'    => $request->repayment_terms ?: null,
+            'loan_tenure'        => ($request->loan_tenure !== '') ? (int)$request->loan_tenure : null,
+            'repayment_date'     => $request->repayment_date ?: null,
+            'remarks'            => $request->remarks ?: null,
+            'payment_method'     => $request->payment_method ?: null,
+            'murabaha_status'    => $request->murabaha_status ?: 'no',
+            'murabaha_date'      => $request->murabaha_date ?: null,
         ]);
 
-        return response()->json($investment);
+        return response()->json(['ok' => true]);
     }
 
     public function finalize(Request $request, $id)
@@ -97,22 +102,41 @@ class GtsInvestmentController extends Controller
     {
         $c = ActiveCycle::id($request);
 
+        if (!Schema::hasTable('gts_investments')) {
+            return response()->json(['total' => '0.0000000']);
+        }
+
         // Pick the correct column name safely
-        $col = Schema::hasColumn('gts_investments', 'investment_amount')
-            ? 'investment_amount'
-            : (Schema::hasColumn('gts_investments', 'amount') ? 'amount' : null);
+        $col = collect(['investment_amount', 'amount'])
+            ->first(fn($cname) => Schema::hasColumn('gts_investments', $cname));
 
         if (!$col) {
             return response()->json([
-                'total' => 0,
+                'total' => '0.0000000',
                 '_warn' => 'No amount column found on gts_investments (expected investment_amount or amount)',
             ]);
         }
 
-        // If model uses BelongsToCycle:
-        $total = GtsInvestment::where('cycle_id',$c)->sum($col);
+        $q = DB::table('gts_investments as i')
+            ->where('i.cycle_id', $c);
 
-        return response()->json(['total' => round((float) $total, 2)]);
+        // soft/flags (optional but safer)
+        if (Schema::hasColumn('gts_investments', 'deleted_at')) {
+            $q->whereNull('i.deleted_at');
+        }
+        foreach (['deleted', 'is_deleted', 'archived'] as $f) {
+            if (Schema::hasColumn('gts_investments', $f)) {
+                $q->where("i.$f", 0);
+            }
+        }
+
+        // sum in SQL as DECIMAL and round to 7 dp
+        $sum = $q->selectRaw("ROUND(SUM(COALESCE(i.$col, 0)), 7) as s")->value('s');
+
+        // return as string to avoid float drift
+        $total = number_format((float)($sum ?? 0), 7, '.', '');
+
+        return response()->json(['total' => $total]);
     }
 
     public function uploadAttachments(Request $request, $id)

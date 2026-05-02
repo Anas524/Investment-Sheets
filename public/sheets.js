@@ -2,38 +2,77 @@ $.ajaxSetup({
     headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
 });
 
-const sheetHeaders = {
-    'gts-material': {
-        title: 'GTS Material Entries',
-        icon: '/images/material-sheet-logo.png',
-    },
-    'gts-investment': {
-        title: 'GTS Investment Entries',
-        icon: '/images/investment-sheet-logo.png',
-    },
-    us: {
-        title: 'US Client Payment',
-        icon: '/images/us-sheet-logo.png',
-    },
-    sq: {
-        title: 'SQ Sheet',
-        icon: '/images/sq-sheet-icon.png',
-    },
-    local: {
-        title: 'Local Sales',
-        icon: '/images/local-sales-icon.png',
-    },
-    summary: {
-        title: 'Summary Sheet',
-        icon: '/images/sub-logo.png',
-    },
-    beneficiary: {
-        title: 'Beneficiary Sheet',
-        icon: '/images/beneficiary-logo.png',
-    }
+const BI = {
+    material: 'box-seam',
+    investment: 'safe2',
+    us: 'wallet2',
+    sq: 'person-badge',
+    local: 'shop',
+    summary: 'bar-chart-line',
+    beneficiary: 'bank',
+    customer: 'people'
 };
 
-const CUSTOMER_SHEET_ICON = '/images/customer-sheet-logo.png';
+const sheetHeaders = {
+    'gts-material': { title: 'GTS Material Entries', icon: BI.material },
+    'gts-investment': { title: 'GTS Investment Entries', icon: BI.investment },
+    us: { title: 'US Client Payment', icon: BI.us },
+    sq: { title: 'SQ Sheet', icon: BI.sq },
+    local: { title: 'Local Sales', icon: BI.local },
+    summary: { title: 'Summary Sheet', icon: BI.summary },
+    beneficiary: { title: 'Beneficiary Sheet', icon: BI.beneficiary }
+};
+
+// for any dynamic customer sheet tabs
+const CUSTOMER_SHEET_ICON = BI.customer;
+
+const SHEET_TINT = {
+    'gts-material': 'is-sky',
+    'gts-investment': 'is-green',
+    us: 'is-green',
+    sq: 'is-green',
+    local: 'is-default',
+    summary: 'is-green',
+    beneficiary: 'is-amber'
+};
+
+// apply icon (works for <i> or legacy <img>)
+function setHeaderIcon(iconName, key) {
+    const $ico = $('#headerIcon');
+    if (!$ico.length) return;
+
+    if ($ico.is('img')) {
+        // legacy fallback: if still <img>, point to an SVG path you control
+        $ico.attr('src', `/images/icons/${iconName}.svg`);
+        return;
+    }
+
+    // <i class="bi ..."> path (preferred)
+    const tint = SHEET_TINT[key] || '';
+    // remove any old tint classes
+    ICON_TINT_CLASSES.forEach(c => $ico.removeClass(c));
+    // set the bi icon + base class + optional tint
+    $ico.attr('class', `bi bi-${iconName} header-icon` + (tint ? ` ${tint}` : ''));
+}
+
+function setHeaderForSheet(key) {
+    const meta = sheetHeaders[key];
+    if (meta) {
+        $('#headerTitle').text(meta.title);
+        setHeaderIcon(meta.icon, key);
+        return;
+    }
+
+    // dynamic customer sheets
+    if (key && key.startsWith('customer-')) {
+        const sheetName = key.slice('customer-'.length).toUpperCase();
+        $('#headerTitle').text(`Customer Sheet: ${sheetName}`);
+        setHeaderIcon(BI.customer, key);
+    }
+}
+
+// map tint classes to colors (optional)
+const ICON_TINT_CLASSES = ['is-sky', 'is-amber', 'is-green', 'is-default'];
 
 // US Sheet
 let originalUSClients = [];
@@ -182,7 +221,7 @@ $(document).ready(function () {
         (window._legacyTimers || []).forEach(id => { try { clearInterval(id); } catch { } });
         window._legacyTimers = [];
 
-        // ✅ only block true legacy writers, not the summary renderers
+        // only block true legacy writers, not the summary renderers
         const BLOCK = new Set(['fetchAndUpdateInvestmentTotal']); // keep blocking this if you want
         ['loadCashInBreakdown', 'refreshLoanOutstandingHybrid', 'loadLoanOutstandingLegacy',
             'renderCashInBreakdown', 'renderLoanOutstanding', 'fetchAndUpdateInvestmentTotal']
@@ -206,6 +245,9 @@ $(document).ready(function () {
         ? 'gts-investment'
         : (localStorage.getItem('activeSheet') || 'summary');
 
+    setHeaderForSheet(startSheet);           // ← set title + icon immediately
+    setActiveSheetBtn(startSheet);           // ← mark tab
+
     $(document).on('click', '.sheet-tab', function (e) {
         e.preventDefault();
 
@@ -221,11 +263,11 @@ $(document).ready(function () {
         const header = sheetHeaders[sheet];
         if (header) {
             $('#headerTitle').text(header.title);
-            $('#headerIcon').attr('src', header.icon);
+            setHeaderIcon(header.icon, sheet);
         } else if (sheet.startsWith('customer-')) {
             const sheetName = sheet.slice('customer-'.length).toUpperCase(); // safer than split
             $('#headerTitle').text(`Customer Sheet: ${sheetName}`);
-            $('#headerIcon').attr('src', CUSTOMER_SHEET_ICON); // <-- shared customer logo
+            setHeaderIcon(BI.customer, sheet); // <-- shared customer logo
 
             // make sure any hidden ancestor is unhidden
             unhideAncestors($section);
@@ -2193,14 +2235,40 @@ function getLocalSalesAmount() {
 // ONE global instance
 window.summaryChart = window.summaryChart || null;
 
+// helper: are we on a small screen?
+const isSmall = () => window.matchMedia('(max-width: 640px)').matches;
+
+// apply responsive sizing to an existing chart
+function applyChartSizing(chart) {
+    const s = isSmall();
+    const ds = chart.data.datasets[0];
+
+    // bar geometry
+    ds.categoryPercentage = s ? 0.6 : 0.8;
+    ds.barPercentage = s ? 0.6 : 0.8;
+    ds.barThickness = s ? undefined : 72; // unlock on small, cap on larger
+    ds.maxBarThickness = s ? 56 : 110;
+
+    // ticks/labels
+    chart.options.scales.x.ticks.maxTicksLimit = s ? 3 : 6;
+    chart.options.scales.x.ticks.font = { size: s ? 10 : 12 };
+    chart.options.scales.y.ticks.font = { size: s ? 10 : 12 };
+
+    // legend can be hidden on phones to save space
+    chart.options.plugins.legend.display = !s;
+}
+
 function ensureSummaryChart() {
     const canvas = document.getElementById('summaryChart');
     if (!canvas || typeof Chart === 'undefined') return null;
 
-    if (window.summaryChart && typeof window.summaryChart.update === 'function') return window.summaryChart;
+    if (window.summaryChart && typeof window.summaryChart.update === 'function') {
+        applyChartSizing(window.summaryChart);
+        return window.summaryChart;
+    }
 
     const ctx = canvas.getContext('2d');
-    window.summaryChart = new Chart(ctx, {
+    const chart = new Chart(ctx, {
         type: 'bar',
         data: {
             labels: ['Cash In', 'Cash Out', 'Profit'],
@@ -2211,10 +2279,6 @@ function ensureSummaryChart() {
                 hoverBackgroundColor: ['#16a34a', '#dc2626', '#2563eb'],
                 borderColor: ['#16a34a', '#dc2626', '#2563eb'],
                 borderWidth: 1,
-                categoryPercentage: 0.95,
-                barPercentage: 0.9,
-                barThickness: 92,
-                maxBarThickness: 120,
                 borderRadius: 10
             }]
         },
@@ -2232,12 +2296,32 @@ function ensureSummaryChart() {
                 }
             },
             scales: {
-                y: { ticks: { callback: v => 'AED ' + Number(v).toLocaleString() }, grid: { color: 'rgba(0,0,0,0.06)' } },
-                x: { grid: { display: false } }
+                x: { grid: { display: false }, ticks: {} },
+                y: {
+                    grid: { color: 'rgba(0,0,0,0.06)' },
+                    ticks: {
+                        callback: v => 'AED ' + Number(v).toLocaleString()
+                    }
+                }
             }
         }
     });
-    return window.summaryChart;
+
+    // initial responsive sizing
+    applyChartSizing(chart);
+
+    // keep it crisp on resize/orientation change
+    if (!window._summaryResizeBound) {
+        window.addEventListener('resize', () => {
+            if (!window.summaryChart) return;
+            applyChartSizing(window.summaryChart);
+            window.summaryChart.update('none');
+        });
+        window._summaryResizeBound = true;
+    }
+
+    window.summaryChart = chart;
+    return chart;
 }
 
 let _chartDebounce;
@@ -3250,19 +3334,19 @@ function initBenLogic() {
 
     // ----- Delete using your API helper -----
     $(document)
-    .off('click.benAttachDel', '.ben-att-del')
-    .on('click.benAttachDel', '.ben-att-del', function () {
-        const id = $(this).data('id');
-        if (!id) return;
-        const api = benAttachApi(__benAttachEntryId || 0);
-        $.ajax({
-        url: api.del(id),
-        method: 'DELETE',
-        headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
-        }).done(() => {
-        if (__benAttachEntryId) benFetchAttachments(__benAttachEntryId);
-        }).fail(() => alert('Failed to delete attachment.'));
-    });
+        .off('click.benAttachDel', '.ben-att-del')
+        .on('click.benAttachDel', '.ben-att-del', function () {
+            const id = $(this).data('id');
+            if (!id) return;
+            const api = benAttachApi(__benAttachEntryId || 0);
+            $.ajax({
+                url: api.del(id),
+                method: 'DELETE',
+                headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
+            }).done(() => {
+                if (__benAttachEntryId) benFetchAttachments(__benAttachEntryId);
+            }).fail(() => alert('Failed to delete attachment.'));
+        });
 
     $(document)
         .off('click.benAttBrowse', '#benAttBrowse')
@@ -3679,8 +3763,8 @@ function benRenderAllocTable() {
     };
 
     // Final 3 rows
-    $body.append(mkRow('Shareholder 1', 47.5, sh1Allocated, sh1Withdrawn, rowCls('sh1')));
-    $body.append(mkRow('Shareholder 2', 47.5, sh2Allocated, sh2Withdrawn, rowCls('sh2')));
+    $body.append(mkRow('Shareholder 1 - Mr. Khurram', 47.5, sh1Allocated, sh1Withdrawn, rowCls('sh1')));
+    $body.append(mkRow('Shareholder 2 - Mr. Zeeshan', 47.5, sh2Allocated, sh2Withdrawn, rowCls('sh2')));
     $body.append(mkRow('Charity', 5, charityAllocated, charityWithdrawn, rowCls('charity')));
 }
 
@@ -3911,25 +3995,25 @@ function closeBenAttachModal() {
 
 // ----- List + Open link -----
 function benFetchAttachments(entryId) {
-  const api = benAttachApi(entryId);
-  $('#benAttachList').html('<div class="py-6 text-center text-gray-500 text-sm">Loading…</div>');
-  $.getJSON(api.list, { _t: Date.now() }).done(res => {
-    const atts = res?.attachments || [];
-    if (!atts.length) {
-      $('#benAttachList').html('<div class="py-6 text-center text-gray-500 text-sm">No attachments yet.</div>');
-      return;
-    }
-    const fmtSize = (n) => {
-      n = Number(n) || 0;
-      if (n < 1024) return `${n} B`;
-      if (n < 1024*1024) return `${(n/1024).toFixed(1)} KB`;
-      return `${(n/1024/1024).toFixed(1)} MB`;
-    };
+    const api = benAttachApi(entryId);
+    $('#benAttachList').html('<div class="py-6 text-center text-gray-500 text-sm">Loading…</div>');
+    $.getJSON(api.list, { _t: Date.now() }).done(res => {
+        const atts = res?.attachments || [];
+        if (!atts.length) {
+            $('#benAttachList').html('<div class="py-6 text-center text-gray-500 text-sm">No attachments yet.</div>');
+            return;
+        }
+        const fmtSize = (n) => {
+            n = Number(n) || 0;
+            if (n < 1024) return `${n} B`;
+            if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+            return `${(n / 1024 / 1024).toFixed(1)} MB`;
+        };
 
-    const rows = atts.map(a => {
-      const type = (a.type || 'other');
-      const url  = a.path ? `/storage/${a.path}` : (a.url || null); // prefer public storage
-      return `
+        const rows = atts.map(a => {
+            const type = (a.type || 'other');
+            const url = a.path ? `/storage/${a.path}` : (a.url || null); // prefer public storage
+            return `
         <div class="flex items-center gap-3 py-3">
           <span class="inline-flex text-xs px-2 py-0.5 rounded-full ${pillClass(type)}">
             ${type[0].toUpperCase() + type.slice(1)}
@@ -3942,11 +4026,11 @@ function benFetchAttachments(entryId) {
           ${benIsClosed() ? '' : `<button class="ben-att-del text-red-600 hover:bg-red-50 rounded px-2 py-1 text-sm" data-id="${a.id}"><i class="bi bi-trash"></i></button>`}
         </div>
       `;
-    }).join('');
-    $('#benAttachList').html(rows);
-  }).fail(() => {
-    $('#benAttachList').html('<div class="py-6 text-center text-red-600 text-sm">Failed to load attachments.</div>');
-  });
+        }).join('');
+        $('#benAttachList').html(rows);
+    }).fail(() => {
+        $('#benAttachList').html('<div class="py-6 text-center text-red-600 text-sm">Failed to load attachments.</div>');
+    });
 }
 
 function pillClass(t) {

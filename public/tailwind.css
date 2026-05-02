@@ -11,38 +11,95 @@ td {
   font-variant-numeric: tabular-nums !important;
 }
 
-/* Bigger size for ALL sheet logos */
-#headerIcon {
-  width: 34px;
-  /* adjust to taste */
-  height: 34px;
-  object-fit: contain;
-  transition: width .15s ease, height .15s ease, margin .15s ease;
+/* ===== Header: icon + title + badge (class-based) ===== */
+.header-icon{
+  display:inline-flex; align-items:center; justify-content:center;
+  font-size:1.4rem;        /* ~22–24px */
+  line-height:1;
+  color:#01569F;           /* brand tint */
+  vertical-align:middle;
+  margin:0;
 }
 
-/* Keep the Summary (sub-logo.png) smaller + slight drop */
-#headerIcon[src$="sub-logo.png"],
-#headerIcon[src*="sub-logo.png"] {
-  /* fallback if path has query/hash */
-  width: 28px;
-  height: 28px;
-  margin-top: 0;
-  margin-bottom: 5px;
+/* tints */
+.header-icon.is-sky   { color:#0ea5e9; }  /* sky-500 */
+.header-icon.is-amber { color:#d97706; }  /* amber-600 */
+.header-icon.is-green { color:#16a34a; }  /* green-600 */
+.header-icon.is-default { color:#01569F; } /* brand default */
+
+.header-title{
+  margin: 0;
+  line-height: 1;
+  font-size: 1.125rem; /* text-lg */
+  font-weight: 600;
+}
+/* status badge aligns perfectly with title */
+.status-badge{
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  padding: .175rem .45rem;
+  border-radius: .5rem;
+  font-size: .7rem;
+  font-weight: 600;
+  position: relative;
+  top: 0; /* prevents “slightly downward” look */
+}
+.status-open{   background:#E6F9EB; color:#157F3E; }
+.status-closed{ background:#FCE7E7; color:#B42318; }
+
+/* ===== Dashboard button (compact, modern) ===== */
+.btn-dashboard{
+  display:inline-flex; align-items:center; gap:.5rem;
+  padding:.55rem .9rem; border-radius:.75rem;
+  background:#0f172a; color:#fff;
+  box-shadow:0 1px 2px rgba(0,0,0,.06);
+  transition:transform .08s ease, background .15s ease, box-shadow .15s ease;
+}
+.btn-dashboard:hover{ background:#000; }
+.btn-dashboard:active{ transform:translateY(1px); }
+
+/* ===== Set meta (right side) ===== */
+.set-meta{
+  text-align:right; line-height:1.1;
+  font-size:.75rem; color:#6b7280;
 }
 
-/* Just to be explicit: remove any extra bottom margin for others */
-#headerIcon:not([src*="sub-logo.png"]) {
-  margin-top: 5px;
-  margin-bottom: 0;
+/* ===== Header logo (right) — fluid cap ===== */
+.header-logo{
+  height:auto; width:auto;
+  max-height:clamp(44px, 8vh, 84px);
+  object-fit:contain;
+}
+/* If you still have #headerLogo rules, you can remove them. */
+
+/* ===== Bottom tabs — flat style, active top bar ===== */
+.sheet-tab{
+  position:relative;
+  border-radius:0;                   /* no rounded corners */
+  background:transparent;            /* flat */
+  padding:.65rem .9rem;
+  font-weight:500;
+  color:#374151;                     /* gray-700 */
+}
+.sheet-tab:hover{ background:#f3f4f6; }
+.sheet-tab.active{
+  color:#111827;                     /* gray-900 */
+  font-weight:600;
+}
+.sheet-tab.active::before{
+  content:"";
+  position:absolute; inset-inline:0; top:0;
+  height:3px; background:#01569F;    /* brand blue */
+}
+@media (max-width:640px){
+  .sheet-tab{ padding:.6rem .75rem; }
 }
 
-#headerTitle {
-  margin-bottom: 5px;
-}
-
-.header-bar:has(#headerIcon[src*="sub-logo.png"]) #headerTitle {
-  margin-bottom: 0;
-}
+/* ===== keep these mobile helpers you already added ===== */
+.tabs-scroll{ padding-bottom:calc(env(safe-area-inset-bottom) + 8px); }
+.no-scrollbar{ -ms-overflow-style:none; scrollbar-width:none; }
+.no-scrollbar::-webkit-scrollbar{ display:none; }
 
 .modal-content {
   border-radius: 1rem;
@@ -173,18 +230,6 @@ td {
   /* ring-blue-500/20 */
 }
 
-.sheet-tab.active {
-  background-color: #01569F;
-  /* indigo-600 */
-  color: #ffffff;
-}
-
-.sheet-tab.active:hover {
-  background-color: #004683;
-  /* indigo-700 */
-  color: #ffffff;
-}
-
 /* keep this in your stylesheet */
 .dynamic-textarea,
 .gts-area,
@@ -254,4 +299,327 @@ html.is-cycle-closed td {
 html.is-cycle-closed th.closed-hide,
 html.is-cycle-closed td.closed-hide {
   display: none !important;
+}
+
+/* cycles responsive tweaks */
+#cycleGrid {
+  min-height: 220px;
+}
+
+@media (min-width: 1024px) {
+  #cycleGrid .centered-loading { min-height: 320px; }
+}
+
+@media (max-width: 767px) {
+
+  /* stack header nicely and make button full-width already handled by HTML classes */
+  .modal-panel {
+    padding: 1rem;
+  }
+
+  .rounded-2xl {
+    border-radius: 0.75rem;
+  }
+}
+
+@media (min-width: 768px) {
+
+  /* make card spacing slightly denser on larger screens */
+  #cycleGrid>* {
+    /* nothing required here, kept for future tuning */
+  }
+}
+
+/* --- Small-screen polish --- */
+
+/* iOS safe-area for sticky bottom bar */
+.tabs-scroll {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 8px);
+}
+
+/* Hide mobile scrollbars for the tab strip */
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE/Edge */
+  scrollbar-width: none;     /* Firefox */
+}
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Header images scale gracefully */
+#headerLogo { max-width: 100%; height: auto; }
+
+/* Make any wide content scroll horizontally on small screens */
+.responsive-h-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Table responsiveness (non-destructive) */
+@media (max-width: 768px) {
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .us-table, .sq-table, table { min-width: 720px; } /* prevents cramped columns */
+}
+
+/* KPI sticky backdrop already present; make it crisper on mobile */
+@media (max-width: 640px) {
+  #kpiSticky .kpi-backdrop {
+    background: rgba(255,255,255,.95);
+    -webkit-backdrop-filter: saturate(160%) blur(6px);
+    backdrop-filter: saturate(160%) blur(6px);
+  }
+}
+
+/* Closed-set state: ensure tables can still expand and not clip */
+html.is-cycle-closed table {
+  max-width: none;
+}
+
+/* Summary chart responsive sizing */
+.chart-wrap { height: 220px; }               /* ~phone */
+@media (min-width: 400px){ .chart-wrap{ height: 260px; } }
+@media (min-width: 640px){ .chart-wrap{ height: 300px; } }  /* sm */
+@media (min-width: 768px){ .chart-wrap{ height: 360px; } }  /* md */
+@media (min-width: 1024px){ .chart-wrap{ height: 420px; } } /* lg+ */
+
+#summaryChart { width: 100% !important; height: 100% !important; }
+
+/* =========================
+   PM MODALS (Metal Ledger UI)
+   ========================= */
+
+/* Root modal overlay */
+.pm-modal{
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: none;              /* hidden by default */
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  overflow: auto;
+}
+
+/* When we "open" it from JS we set display:flex */
+.pm-modal:not(.hidden){
+  display: flex;
+}
+
+/* Backdrop */
+.pm-backdrop{
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(2px);
+}
+
+/* Modal container */
+.pm-modal-wrap{
+  position: relative;
+  width: 100%;
+  max-width: 760px;           /* upload modal default */
+  max-height: 90vh;
+  margin: 0 auto;
+  z-index: 1;
+  overflow-x: hidden;
+}
+
+/* Viewer modal wider */
+.pm-panel--viewer{
+  width: 100%;
+}
+
+/* Panel card */
+.pm-panel{
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 18px;
+  box-shadow: 0 40px 120px rgba(0,0,0,0.25);
+  border: 1px solid rgba(15,23,42,0.10);
+  overflow: hidden;
+}
+
+.pm-panel-body{
+  overflow-x: hidden;         
+}
+
+/* Header / Footer */
+.pm-panel-head{
+  border-bottom: 1px solid rgba(15,23,42,0.10);
+  background: #fff;
+}
+.pm-panel-foot{
+  border-top: 1px solid rgba(15,23,42,0.10);
+  background: #fff;
+}
+
+/* Subtext */
+.pm-subtext{
+  color: #64748b; /* slate-500 */
+}
+
+/* Close button */
+.pm-close-btn{
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  border: 1px solid rgba(15,23,42,0.10);
+  background: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #334155;
+  cursor: pointer;
+}
+.pm-close-btn:hover{
+  border-color: rgba(239,68,68,0.35);
+  color: #dc2626;
+}
+
+/* Buttons */
+.pm-btn{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  user-select: none;
+  border: 1px solid transparent;
+  transition: transform .06s ease, box-shadow .12s ease, background .12s ease, border-color .12s ease;
+}
+.pm-btn:active{
+  transform: translateY(1px);
+}
+
+/* Secondary button */
+.pm-btn-secondary{
+  background: #fff;
+  border-color: rgba(15,23,42,0.14);
+  color: #0f172a;
+}
+.pm-btn-secondary:hover{
+  background: #f8fafc;
+  border-color: rgba(15,23,42,0.20);
+}
+
+/* Primary button */
+.pm-btn-primary{
+  background: #2563eb; /* blue-600 */
+  color: #fff;
+  box-shadow: 0 10px 30px rgba(37,99,235,0.25);
+}
+.pm-btn-primary:hover{
+  background: #1d4ed8; /* blue-700 */
+}
+
+/* Dropzone */
+.pm-dropzone{
+  border: 2px dashed rgba(15,23,42,0.16);
+  border-radius: 16px;
+  background: #f8fafc;
+}
+.pm-dropzone:hover{
+  border-color: rgba(37,99,235,0.45);
+  background: #f1f5ff;
+}
+
+/* Existing list scroll (nice look) */
+#matExistingList, #attExistingList{
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148,163,184,0.7) transparent;
+}
+#matExistingList::-webkit-scrollbar,
+#attExistingList::-webkit-scrollbar{
+  width: 10px;
+}
+#matExistingList::-webkit-scrollbar-thumb,
+#attExistingList::-webkit-scrollbar-thumb{
+  background: rgba(148,163,184,0.65);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+/* Viewer list item highlight (when you add ring classes in JS) */
+#matViewerList button.ring-2,
+#attViewerList button.ring-2{
+  outline: 2px solid rgba(100,116,139,0.6);
+}
+
+/* Preview box image behavior */
+#matPreviewImg,
+#attPreviewImg{
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Responsive: viewer width */
+@media (min-width: 1024px){
+  .pm-modal-wrap{ max-width: 900px; }
+  .pm-panel--viewer .pm-modal-wrap{ max-width: 1200px; }
+}
+
+/* ---------- Upload layout: 3 boxes in one row on desktop ---------- */
+.pm-upload-grid{
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+@media (min-width: 1024px){
+  .pm-upload-grid{
+    grid-template-columns: repeat(3, 1fr);   /* Invoice | Receipt | Note */
+  }
+}
+
+/* compact dropzone */
+.pm-dropzone.pm-dropzone--compact{
+  padding: 12px;
+  min-height: 92px;
+  display: flex;
+  align-items: center;
+}
+
+/* label + button in single line */
+.pm-fileline{
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pm-filemeta{
+  min-width: 0;
+}
+
+.pm-filemeta .pm-file-name{
+  white-space: normal !important;
+  overflow-wrap: anywhere;   /* best for long tokens */
+  word-break: break-word;
+  line-height: 1.2;
+  font-size: 13px;
+  color: #334155;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* in existing list too */
+.pm-existing-name{
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.pm-filemeta .pm-file-hint{
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 2px;
 }

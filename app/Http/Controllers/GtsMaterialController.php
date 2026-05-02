@@ -32,17 +32,17 @@ class GtsMaterialController extends Controller
         $c = ActiveCycle::id($request);
 
         // money in (from UI)
-        $uiTotal   = round((float)$request->input('ui_total_material', 0), 2);
-        $buyTotal  = round((float)$request->input('total_material_buy', $uiTotal), 2);
-        $noVat     = round((float)$request->input('total_material', 0), 2);
-        $vat       = round((float)$request->input('total_vat', $noVat * 0.05), 2);
-        $weight    = round((float)$request->input('total_weight', 0), 2);
-        
+        $uiTotal   = $this->dec7($request->input('ui_total_material', 0));
+        $buyTotal  = $this->dec7($request->input('total_material_buy', $uiTotal));
+        $noVat     = $this->dec7($request->input('total_material', 0));
+        $vat       = $this->dec7($request->input('total_vat', ($request->input('total_material', 0) * 0.05)));
+        $weight    = $this->dec7($request->input('total_weight', 0));
+
         // shipping
-        $shipping  = round((float)$request->input('shipping_cost', 0), 2);
-        $dgd       = round((float)$request->input('dgd', 0), 2);
-        $labour    = round((float)$request->input('labour', 0), 2);
-        $totShip   = round((float)$request->input('total_shipping_cost', $shipping + $dgd + $labour), 2);
+        $shipping  = $this->dec7($request->input('shipping_cost', 0));
+        $dgd       = $this->dec7($request->input('dgd', 0));
+        $labour    = $this->dec7($request->input('labour', 0));
+        $totShip   = $this->dec7($request->input('total_shipping_cost', ($request->input('shipping_cost', 0) + $request->input('dgd', 0) + $request->input('labour', 0))));
 
         $material = GtsMaterial::create([
             'cycle_id'            => $c,
@@ -97,10 +97,27 @@ class GtsMaterialController extends Controller
         $c = ActiveCycle::id($request);
         $material = GtsMaterial::with('items')->forCycle($c)->findOrFail($id);
 
+        $isDraft = ($material->status ?? null) === 'draft';
+
+        if ($isDraft) {
+            $request->validate([
+                'invoice_date'       => ['nullable', 'date'],
+                'invoice_no'         => ['nullable', 'string', 'max:255'],
+                'supplier_name'      => ['nullable', 'string', 'max:255'],
+                'brief_description'  => ['nullable', 'string', 'max:500'],
+            ]);
+        }
+
         // basic fields
-        $shipping = round((float)$request->input('shipping_cost', 0), 2);
-        $dgd      = round((float)$request->input('dgd', 0), 2);
-        $labour   = round((float)$request->input('labour', 0), 2);
+        $shipping = $this->dec7($request->input('shipping_cost', 0));
+        $dgd      = $this->dec7($request->input('dgd', 0));
+        $labour   = $this->dec7($request->input('labour', 0));
+
+        // if client passed total_shipping_cost use it, else sum parts
+        $material->total_shipping_cost = $this->dec7($request->input(
+            'total_shipping_cost',
+            ((float)$shipping + (float)$dgd + (float)$labour)
+        ));
 
         $material->mode_of_transaction = $request->mode_of_transaction;
         $material->receipt_no          = $request->receipt_no;
@@ -108,7 +125,6 @@ class GtsMaterialController extends Controller
         $material->shipping_cost       = $shipping;
         $material->dgd                 = $dgd;
         $material->labour              = $labour;
-        $material->total_shipping_cost = round((float)$request->input('total_shipping_cost', $shipping + $dgd + $labour), 2);
 
         // If items are sent, replace them
         if ($request->has('materials') && is_array($request->materials)) {
@@ -143,46 +159,66 @@ class GtsMaterialController extends Controller
         $hasNoVat   = $request->filled('total_material');
         $hasVat     = $request->filled('total_vat');
         $hasWeight  = $request->filled('total_weight');
-    
+
         if ($hasUi || $hasBuy || $hasNoVat || $hasVat || $hasWeight) {
-            if ($hasUi)     $material->ui_total_material  = round((float)$request->ui_total_material, 2);
-            if ($hasBuy)    $material->total_material_buy = round((float)$request->total_material_buy, 2);
-            if ($hasNoVat)  $material->total_material     = round((float)$request->total_material, 2);
-            if ($hasVat)    $material->total_vat          = round((float)$request->total_vat, 2);
-            if ($hasWeight) $material->total_weight       = round((float)$request->total_weight, 2);
+            if ($hasUi)     $material->ui_total_material  = $this->dec7($request->ui_total_material);
+            if ($hasBuy)    $material->total_material_buy = $this->dec7($request->total_material_buy);
+            if ($hasNoVat)  $material->total_material     = $this->dec7($request->total_material);
+            if ($hasVat)    $material->total_vat          = $this->dec7($request->total_vat);
+            if ($hasWeight) $material->total_weight       = $this->dec7($request->total_weight);
         } else {
             // Fallback: recompute from items (legacy callers)
             $material->load('items');
             $totalNoVat  = 0.0;
             $totalBuy    = 0.0;
             $totalWeight = 0.0;
-    
+
             foreach ($material->items as $it) {
                 $units    = (float) ($it->units ?? 0);
                 $unit     = (float) ($it->unit_price ?? 0);
                 $vatInput = (float) ($it->vat ?? 0);
                 $wctn     = (float) ($it->weight_per_ctn ?? 0);
                 $ctns     = (float) ($it->ctns ?? 0);
-    
+
                 $base   = $units * $unit;
                 $rowBuy = ($vatInput > 1) ? ($base * $vatInput) : $base;
-    
+
                 $totalNoVat  += $base;
                 $totalBuy    += $rowBuy;
                 $totalWeight += ($wctn * $ctns);
             }
-    
-            $material->total_material      = round($totalNoVat, 2);
-            $material->total_vat           = round($totalNoVat * 0.05, 2);
-            $material->total_material_buy  = round($totalBuy, 2);
-            $material->ui_total_material   = round($totalBuy, 2);
-            $material->total_weight        = round($totalWeight, 2);
+
+            $material->total_material     = $this->dec7($totalNoVat);
+            $material->total_vat          = $this->dec7($totalNoVat * 0.05);
+            $material->total_material_buy = $this->dec7($totalBuy);
+            $material->ui_total_material  = $this->dec7($totalBuy);
+            $material->total_weight       = $this->dec7($totalWeight);
         }
-    
+
+        // allow updating header fields
+        if ($request->has('invoice_date')) {
+            $material->invoice_date = $request->input('invoice_date');
+        }
+        if ($request->has('invoice_no')) {
+            $material->invoice_no = $request->input('invoice_no');
+        }
+        if ($request->has('supplier_name')) {
+            $material->supplier_name = $request->input('supplier_name');
+        }
+        if ($request->has('brief_description')) {
+            $material->brief_description = $request->input('brief_description');
+        }
+
         $material->save();
-    
+
         return response()->json([
             'ok'                  => true,
+
+            'invoice_date'        => $material->invoice_date,
+            'invoice_no'          => $material->invoice_no,
+            'supplier_name'       => $material->supplier_name,
+            'brief_description'   => $material->brief_description,
+
             'total_shipping_cost' => $material->total_shipping_cost,
             'total_material_buy'  => $material->total_material_buy,
             'ui_total_material'   => $material->ui_total_material,
@@ -244,11 +280,11 @@ class GtsMaterialController extends Controller
         }
 
         // 4) Persist recomputed totals (VAT is 5% of no-VAT total per your rule)
-        $material->total_material     = $totalNoVat;
-        $material->total_vat          = $totalNoVat * 0.05;
-        $material->total_material_buy = $totalBuy;
-        $material->ui_total_material  = $totalBuy;  // keep UI & summaries correct
-        $material->total_weight       = $totalWeight;
+        $material->total_material     = $this->dec7($totalNoVat);
+        $material->total_vat          = $this->dec7($totalNoVat * 0.05);
+        $material->total_material_buy = $this->dec7($totalBuy);
+        $material->ui_total_material  = $this->dec7($totalBuy);  // keep UI & summaries correct
+        $material->total_weight       = $this->dec7($totalWeight);
         $material->save();
 
         // 5) Return fresh numbers so the front-end can repaint instantly
@@ -297,6 +333,18 @@ class GtsMaterialController extends Controller
 
             $material->save();
 
+            Log::info('MAT UPLOAD PATHS', [
+                'invoice_path' => $material->invoice_path,
+                'invoice_exists' => $material->invoice_path ? Storage::disk('public')->exists($material->invoice_path) : null,
+                'invoice_full' => $material->invoice_path ? Storage::disk('public')->path($material->invoice_path) : null,
+
+                'receipt_path' => $material->receipt_path,
+                'receipt_exists' => $material->receipt_path ? Storage::disk('public')->exists($material->receipt_path) : null,
+
+                'note_path' => $material->note_path,
+                'note_exists' => $material->note_path ? Storage::disk('public')->exists($material->note_path) : null,
+            ]);
+
             return response()->json(['success' => true, 'message' => 'Attachments saved.']);
         } catch (\Throwable $e) {
             Log::error('GTS upload failed', ['error' => $e->getMessage()]);
@@ -313,10 +361,37 @@ class GtsMaterialController extends Controller
             return response()->json(['error' => 'Not found'], 404);
         }
 
+        // auto-clean broken paths (prevents 404 in viewer)
+        $fix = function ($col) use ($material) {
+            $p = $material->{$col};
+
+            if ($p && !Storage::disk('public')->exists($p)) {
+                $material->{$col} = null;   // clear invalid path from DB
+                return null;
+            }
+
+            return $p ? Storage::url($p) : null;
+        };
+
+        $invoice = $fix('invoice_path');
+        $receipt = $fix('receipt_path');
+        $note    = $fix('note_path');
+
+        // save only if something was cleaned
+        $material->save();
+
+        // optional debug log (NOW it will run)
+        Log::info('MAT ATT CHECK', [
+            'id' => $material->id,
+            'invoice_path' => $material->invoice_path,
+            'receipt_path' => $material->receipt_path,
+            'note_path' => $material->note_path,
+        ]);
+
         return response()->json([
-            'invoice' => $material->invoice_path ? Storage::url($material->invoice_path) : null,
-            'receipt' => $material->receipt_path ? Storage::url($material->receipt_path) : null,
-            'note'    => $material->note_path ? Storage::url($material->note_path) : null,
+            'invoice' => $invoice,
+            'receipt' => $receipt,
+            'note'    => $note,
         ]);
     }
 
@@ -396,10 +471,10 @@ class GtsMaterialController extends Controller
             elseif (in_array('status', $cols))        $base->whereIn('m.status', ['posted', 'approved', 'completed', 1, true]);
         }
 
-        // ---- MATERIAL: prefer ui_total_material, else total_material ----
-        $materialCol = in_array('ui_total_material', $cols)
-            ? 'm.ui_total_material'
-            : (in_array('total_material', $cols) ? 'm.total_material' : null);
+        // ---- MATERIAL: prefer total_material, else ui_total_material ----
+        $materialCol = in_array('total_material', $cols)
+            ? 'm.total_material'
+            : (in_array('ui_total_material', $cols) ? 'm.ui_total_material' : null);
 
         $material = $materialCol
             ? (float) (clone $base)->selectRaw("ROUND(SUM(COALESCE($materialCol,0)),2) as s")->value('s')
@@ -444,5 +519,92 @@ class GtsMaterialController extends Controller
                 'cycle'       => $cid,
             ],
         ]);
+    }
+
+    protected function dec7($v): ?string
+    {
+        if ($v === null) return null;
+        $s = trim((string)$v);
+        // Keep optional sign, digits, optional dot + up to 7 decimals
+        if (!preg_match('/^-?\d+(?:\.\d+)?$/', $s)) {
+            // if it has commas or spaces etc, strip non-numeric except dot/sign
+            $s = preg_replace('/[^0-9.\-]/', '', $s);
+        }
+        if ($s === '' || $s === '-' || $s === '.')
+            return '0';
+
+        // limit to 7 fractional digits without floating math
+        if (strpos($s, '.') !== false) {
+            [$int, $frac] = explode('.', $s, 2);
+            $s = $int . '.' . substr($frac, 0, 7);
+        }
+        return $s;
+    }
+
+    public function deleteAttachment(Request $request, $id)
+    {
+        $c = ActiveCycle::id($request);
+        $material = GtsMaterial::forCycle($c)->findOrFail($id);
+
+        $type = $request->input('type'); // invoice|receipt|note
+        if (!in_array($type, ['invoice', 'receipt', 'note'], true)) {
+            return response()->json(['message' => 'Invalid type'], 422);
+        }
+
+        $col = $type . '_path'; // invoice_path / receipt_path / note_path
+        $path = $material->{$col};
+
+        // delete file if exists
+        if ($path && Storage::disk('public')->exists($path)) {
+            Storage::disk('public')->delete($path);
+        }
+
+        // clear db column
+        $material->{$col} = null;
+        $material->save();
+
+        // return updated urls (safe)
+        $makeUrl = function ($p) {
+            if (!$p) return null;
+            if (!Storage::disk('public')->exists($p)) return null;
+            return Storage::url($p);
+        };
+
+        $attachments = [
+            'invoice' => $makeUrl($material->invoice_path),
+            'receipt' => $makeUrl($material->receipt_path),
+            'note'    => $makeUrl($material->note_path),
+        ];
+
+        return response()->json([
+            'success' => true,
+            'message' => ucfirst($type) . ' deleted.',
+            'attachments' => $attachments,
+            'count' => collect($attachments)->filter()->count(),
+        ]);
+    }
+
+    public function debugAttachment(Request $request, $id)
+    {
+        $c = ActiveCycle::id($request);
+        $m = GtsMaterial::forCycle($c)->findOrFail($id);
+
+        $paths = [
+            'invoice_path' => $m->invoice_path,
+            'receipt_path' => $m->receipt_path,
+            'note_path' => $m->note_path,
+        ];
+
+        $check = [];
+        foreach ($paths as $k => $p) {
+            $check[$k] = [
+                'path' => $p,
+                'exists' => $p ? Storage::disk('public')->exists($p) : false,
+                'full' => $p ? Storage::disk('public')->path($p) : null,
+                'url' => $p ? Storage::url($p) : null,
+            ];
+        }
+
+        return response()->json($check);
     }
 }

@@ -7,6 +7,7 @@ use App\Models\USClient;
 use App\Services\CycleMetricService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\DB;
 
 class CycleController extends Controller
 {
@@ -15,9 +16,29 @@ class CycleController extends Controller
     public function index()
     {
         $cycles = Cycle::orderBy('created_at', 'asc')
-               ->orderBy('id', 'asc')
-               ->get();
-        return view('cycles.index', compact('cycles'));
+            ->orderBy('id', 'asc')
+            ->get();
+
+        // Prefer OPEN book
+        $openBook = DB::table('pl_books')
+            ->where('is_closed', 0)
+            ->orderByDesc('id')
+            ->first();
+
+        // Fallback to latest
+        $latestBook = DB::table('pl_books')
+            ->orderByDesc('id')
+            ->first();
+
+        $book = $openBook ?: $latestBook;
+
+        return view('cycles.index', [
+            'cycles'      => $cycles,
+            'plBookId'    => $book?->id,
+            'plFromMonth' => $book?->from_month,
+            'plToMonth'   => $book?->to_month,
+            'plIsClosed'  => (bool) ($book?->is_closed),
+        ]);
     }
 
     public function kpis(Request $request)
